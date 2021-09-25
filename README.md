@@ -64,7 +64,7 @@ See [YARD documentation](http://www.rubydoc.info/gems/ob64).
 
 ## Releases
 
-See [CHANGELOG.md].
+See [{file:CHANGELOG.md}](CHANGELOG.md].
 
 ## Development
 
@@ -110,7 +110,12 @@ THE SOFTWARE.
 
 ### libbase64
 
-Released under the BSD 2-clause License. See [vendor/libbase64/LICENSE].
+Released under the BSD 2-clause License. See [{file:vendor/libbase64/LICENSE}](vendor/libbase64/LICENSE).
+
+Copyright (c) 2005-2007, Nick Galbreath
+Copyright (c) 2013-2019, Alfred Klomp
+Copyright (c) 2015-2017, Wojciech Mula
+Copyright (c) 2016-2017, Matthieu Darbois
 
 ## Code of Conduct
 
