@@ -110,7 +110,7 @@ THE SOFTWARE.
 
 ### libbase64
 
-Released under the BSD 2-clause License. See [{file:vendor/libbase64/LICENSE}](vendor/libbase64/LICENSE).
+Released under the BSD 2-clause License. See [{file:vendor/libbase64/LICENSE}](https://github.com/jcmfernandes/base64-cmake/blob/feature/cmake/LICENSE).
 
 Copyright (c) 2005-2007, Nick Galbreath
 Copyright (c) 2013-2019, Alfred Klomp
