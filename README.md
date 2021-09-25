@@ -64,7 +64,7 @@ See [YARD documentation](http://www.rubydoc.info/gems/ob64).
 
 ## Releases
 
-See [{file:CHANGELOG.md}](CHANGELOG.md].
+See [{file:CHANGELOG.md}](CHANGELOG.md).
 
 ## Development
 
