@@ -1,0 +1,10 @@
+fix: true
+parallel: true
+format: progress
+
+ignore:
+  - 'benchmark.rb'
+  - 'ext/**/*'
+  - 'vendor/**/*'
+  - 'spec/**/*':
+    - Layout/AlignHash
