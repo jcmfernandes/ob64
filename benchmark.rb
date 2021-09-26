@@ -4,6 +4,11 @@ require "securerandom"
 require "ob64"
 require "base64"
 
+$run_encode_benchmark = false
+$run_decode_benchmark = false
+$run_urlsafe_encode_benchmark = false
+$run_urlsafe_decode_benchmark = true
+
 def to_size(bytes)
   bytes >= 2**20 ? "#{bytes / 2**20} MB" : "#{bytes / 2**10} kB"
 end
@@ -59,7 +64,7 @@ encode_benchmark do
 
     x.compare!
   end
-end
+end if $run_encode_benchmark
 
 decode_benchmark do
   Benchmark.ips do |x|
@@ -71,9 +76,43 @@ decode_benchmark do
     end
 
     x.report("ob64 .decode") do
-      Ob64.encode($encoded)
+      Ob64.decode($encoded)
     end
 
     x.compare!
   end
-end
+end if $run_decode_benchmark
+
+encode_benchmark do
+  Benchmark.ips do |x|
+    x.time = 5
+    x.warmup = 2
+
+    x.report("base64 .urlsafe_encode64") do
+      Base64.urlsafe_encode64($unencoded)
+    end
+
+    x.report("ob64 .urlsafe_encode") do
+      Ob64.urlsafe_encode($unencoded)
+    end
+
+    x.compare!
+  end
+end if $run_urlsafe_encode_benchmark
+
+decode_benchmark do
+  Benchmark.ips do |x|
+    x.time = 5
+    x.warmup = 2
+
+    x.report("base64 .urlsafe_decode64") do
+      Base64.urlsafe_decode64($encoded)
+    end
+
+    x.report("ob64 .urlsafe_decode") do
+      Ob64.urlsafe_decode($encoded)
+    end
+
+    x.compare!
+  end
+end if $run_urlsafe_decode_benchmark
