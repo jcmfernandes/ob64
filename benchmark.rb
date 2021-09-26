@@ -4,9 +4,9 @@ require "securerandom"
 require "ob64"
 require "base64"
 
-$run_encode_benchmark = false
-$run_decode_benchmark = false
-$run_urlsafe_encode_benchmark = false
+$run_encode_benchmark = true
+$run_decode_benchmark = true
+$run_urlsafe_encode_benchmark = true
 $run_urlsafe_decode_benchmark = true
 
 def to_size(bytes)
