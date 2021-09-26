@@ -88,7 +88,7 @@ Bug reports and pull requests are welcome on GitHub at https://github.com/jcmfer
 
 Released under the MIT License. See [{file:LICENSE}](LICENSE).
 
-Copyright (c) 2021 João Fernandes
+Copyright (c) 2021, João Fernandes
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
