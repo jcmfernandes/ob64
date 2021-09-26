@@ -43,7 +43,6 @@ require "ob64"
 
 bin1 = "This is data!"
 string = Ob64.encode(bin1)
-
 # string = "VGhpcyBpcyBkYXRhIQ=="
 
 bin2 = Ob64.decode(string)
@@ -110,7 +109,7 @@ THE SOFTWARE.
 
 ### libbase64
 
-Released under the BSD 2-clause License. See [{file:vendor/libbase64/LICENSE}](https://github.com/jcmfernandes/base64-cmake/blob/feature/cmake/LICENSE).
+Released under the BSD 2-clause License. See [LICENSE](https://github.com/jcmfernandes/base64-cmake/blob/feature/cmake/LICENSE).
 
 Copyright (c) 2005-2007, Nick Galbreath  
 Copyright (c) 2013-2019, Alfred Klomp  
