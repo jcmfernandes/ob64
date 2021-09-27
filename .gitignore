@@ -12,6 +12,7 @@
 *.a
 mkmf.log
 Gemfile.lock
+.byebug_history
 
 # rspec failure tracking
 .rspec_status
