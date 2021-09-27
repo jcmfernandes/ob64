@@ -2,7 +2,7 @@
 
 ## [0.2.0] - 2021-09-26
 
-- Added yard documention
+- Add yard documention
 
 ## [0.1.0] - 2021-09-25
 
