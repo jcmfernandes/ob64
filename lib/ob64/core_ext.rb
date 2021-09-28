@@ -24,4 +24,6 @@ module Ob64
 
   ::Base64.prepend(CoreExt)
   ::Base64.singleton_class.prepend(CoreExt)
+
+  private_constant :CoreExt
 end
