@@ -69,13 +69,15 @@ size_t __encoded_length_of(VALUE bin, bool withPadding)
 
 size_t __decoded_length_of(VALUE string)
 {
+  char *string_ptr = StringValuePtr(string);
   size_t string_len = RSTRING_LEN(string);
-  if (string_len < 2) return 0;
-
   size_t padding = 0;
-  char* string_ptr = StringValuePtr(string);
   if (string_ptr[string_len - 1] == '=') padding++;
   if (string_ptr[string_len - 2] == '=') padding++;
+
+  if ((string_len - padding) % 4 == 1) {
+    rb_raise(rb_eArgError, "invalid base64");
+  }
 
   return (3 * (string_len - padding)) / 4;
 }

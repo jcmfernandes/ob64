@@ -85,8 +85,11 @@ module Ob64
 
   # Returns the length of the Base64-decoded version of +string+.
   #
+  # ArgumentError is raised if +string+ has an invalid length.
+  #
   # @param string [String]
   # @return [Integer]
+  # @raise [ArgumentError] if +string+ has an invalid length
   def decoded_length_of(string)
     __decoded_length_of(string)
   end
