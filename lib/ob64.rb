@@ -5,6 +5,9 @@ require_relative "ob64_ext"
 
 # Methods for base64-encoding and -decoding strings.
 module Ob64
+  # The glue between Ruby and libbase64. See +../ext/libbase64/ob64/ob64_ext.c+.
+  module LibBase64; end
+
   include LibBase64
   extend LibBase64
 
@@ -74,7 +77,7 @@ module Ob64
   # Returns the length of the Base64-encoded version of +bin+.
   #
   # @param bin [String]
-  # @param paddding [Boolean] - if the Base64-encoded version of +bin+ will be padded
+  # @param padding [Boolean] - if the Base64-encoded version of +bin+ will be padded
   # @return [Integer]
   def encoded_length_of(bin, padding: true)
     __encoded_length_of(bin, padding)
