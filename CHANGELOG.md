@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+# [0.5.0] - 2021-09-29
+
+- Ignore all previous versions as they weren't including libbase64 (:
+
 # [0.4.0] - 2021-09-28
 
 - Detail gemspec. Ignore.
