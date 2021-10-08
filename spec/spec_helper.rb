@@ -2,7 +2,7 @@
 
 require "ob64"
 
-require "byebug"
+require "debug"
 
 RSpec.configure do |config|
   config.order = "random"
