@@ -1,6 +1,7 @@
 fix: true
 parallel: true
 format: progress
+ruby_version: 2.5
 
 ignore:
   - 'benchmark.rb'
