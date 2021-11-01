@@ -19,8 +19,11 @@ size_t __encoded_length_of_bytes(size_t bytes, bool withPadding);
 size_t __decoded_length_of_string(VALUE string, VALUE exception);
 size_t __decoded_length_of_bytes(size_t bytes, size_t padding, VALUE exception);
 
-#define __raise_error(class, message)                         \
-    rb_raise(rb_const_get(mOb64, rb_intern(class)), message)
+#define __Ob64_error(class_name)                  \
+  rb_const_get(mOb64, rb_intern(class_name))
+
+#define Qtruthy(value)                          \
+  (((value) != Qnil && (value) != Qfalse) ? true : false)
 
 static const rb_data_type_t Ob64_LibBase64_EncodeState_type = {
 	.wrap_struct_name = "Ob64::LibBase64::EncodeState",
@@ -86,11 +89,10 @@ VALUE Ob64_encode_string(VALUE self, VALUE string)
 
 VALUE Ob64_decode_stream(VALUE self, VALUE string, VALUE decodeState, VALUE outbuf)
 {
-
   struct base64_state *state;
   TypedData_Get_Struct(decodeState, struct base64_state, &Ob64_LibBase64_DecodeState_type, state);
 
-  size_t decoded_length = __decoded_length_of_string(string, rb_const_get(mOb64, rb_intern("DecodingError")));
+  size_t decoded_length = __decoded_length_of_string(string, __Ob64_error("DecodingError"));
   VALUE result;
   if (outbuf == Qnil) {
     result = rb_str_buf_new(decoded_length);
@@ -105,9 +107,9 @@ VALUE Ob64_decode_stream(VALUE self, VALUE string, VALUE decodeState, VALUE outb
   size_t nout;
   int ret = base64_stream_decode(state, StringValuePtr(string), RSTRING_LEN(string), StringValuePtr(result), &nout);
   if (ret == 0) {
-    __raise_error("DecodingError", "invalid base64");
+    rb_raise(__Ob64_error("DecodingError"), "invalid base64");
   } else if (ret == -1) {
-    __raise_error("UnsupportedCodecError", "codec not supported");
+    rb_raise(__Ob64_error("UnsupportedCodecError"), "codec not supported");
   }
   rb_str_set_len(result, nout);
 
@@ -129,12 +131,12 @@ VALUE Ob64_decode_string(VALUE self, VALUE string)
 
 VALUE Ob64_encoded_length_of_bytes(VALUE self, VALUE bytes, VALUE withPadding)
 {
-  return ULONG2NUM((unsigned long)__encoded_length_of_bytes(NUM2ULONG(bytes), withPadding != Qnil && withPadding != Qfalse ? true : false));
+  return ULONG2NUM((unsigned long)__encoded_length_of_bytes(NUM2ULONG(bytes), Qtruthy(withPadding)));
 }
 
 VALUE Ob64_encoded_length_of_string(VALUE self, VALUE string, VALUE withPadding)
 {
-  return ULONG2NUM((unsigned long)__encoded_length_of_string(string, withPadding != Qnil && withPadding != Qfalse ? true : false));
+  return ULONG2NUM((unsigned long)__encoded_length_of_string(string, Qtruthy(withPadding)));
 }
 
 VALUE Ob64_decoded_length_of_bytes(VALUE self, VALUE bytes, VALUE padding)
