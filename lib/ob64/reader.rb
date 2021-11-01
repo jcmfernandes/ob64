@@ -3,6 +3,7 @@
 require_relative "stream"
 
 module Ob64
+  # Decode base64-encoded streams.
   class Reader < Stream
     attr_reader :total_bytes_read
 
@@ -23,18 +24,15 @@ module Ob64
       if block_given?
         bytes_read = 0
         loop do
-          decoded_data = __decode_stream(io.read(encoded_length), decode_state, outbuf)
+          decoded_data = __read(encoded_length, outbuf)
           bytes_read += decoded_data.length
-          @total_bytes_read += decoded_data.length
           yield decoded_data
 
           break if eof?
         end
         bytes_read
       else
-        decoded_data = __decode_stream(io.read(encoded_length), decode_state, outbuf)
-        @total_bytes_read += decoded_data.length
-        decoded_data
+        __read(encoded_length, outbuf)
       end
     end
 
@@ -47,6 +45,12 @@ module Ob64
       when 1..Float::INFINITY
         nil
       end
+    end
+
+    def __read(encoded_length, outbuf)
+      decoded_data = __decode_stream(io.read(encoded_length), decode_state, outbuf)
+      @total_bytes_read += decoded_data.length
+      decoded_data
     end
   end
 end

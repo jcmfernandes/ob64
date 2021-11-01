@@ -79,7 +79,7 @@ module Ob64
   # Returns the length of the Base64-encoded version of +bin_or_bytes+.
   #
   # @param bin_or_bytes [String, Integer]
-  # @param padding [Boolean] - if the Base64-encoded version of +bin+ will be padded
+  # @param padding [Boolean] - if the Base64-encoded version of +bin_or_bytes+ will be padded
   # @return [Integer]
   def encoded_length_of(bin_or_bytes, padding: true)
     case bin_or_bytes
@@ -94,7 +94,7 @@ module Ob64
 
   # Returns the length of the Base64-decoded version of +string_or_bytes+.
   #
-  # ArgumentError is raised if +string_or_bytes+ has an invalid length.
+  # ArgumentError is raised if +string_or_bytes+ has or is an invalid length.
   #
   # @param string_or_bytes [String, Integer]
   # @return [Integer]

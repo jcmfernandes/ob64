@@ -19,6 +19,9 @@ size_t __encoded_length_of_bytes(size_t bytes, bool withPadding);
 size_t __decoded_length_of_string(VALUE string, VALUE exception);
 size_t __decoded_length_of_bytes(size_t bytes, size_t padding, VALUE exception);
 
+#define __raise_error(class, message)                         \
+    rb_raise(rb_const_get(mOb64, rb_intern(class)), message)
+
 static const rb_data_type_t Ob64_LibBase64_EncodeState_type = {
 	.wrap_struct_name = "Ob64::LibBase64::EncodeState",
 	.function = {
@@ -102,9 +105,9 @@ VALUE Ob64_decode_stream(VALUE self, VALUE string, VALUE decodeState, VALUE outb
   size_t nout;
   int ret = base64_stream_decode(state, StringValuePtr(string), RSTRING_LEN(string), StringValuePtr(result), &nout);
   if (ret == 0) {
-    rb_raise(rb_const_get(mOb64, rb_intern("DecodingError")), "invalid base64");
+    __raise_error("DecodingError", "invalid base64");
   } else if (ret == -1) {
-    rb_raise(rb_const_get(mOb64, rb_intern("UnsupportedCodecError")), "codec not found");
+    __raise_error("UnsupportedCodecError", "codec not supported");
   }
   rb_str_set_len(result, nout);
 
