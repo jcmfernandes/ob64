@@ -13,6 +13,40 @@ module Ob64
       @total_bytes_read = 0
     end
 
+    # Decodes +length+ bytes from the I/O stream.
+    #
+    # +length+ must be a non-negative integer or +nil+.
+    #
+    # If +length+ is a positive integer, read tries to decode +length+ bytes
+    # without any conversion (binary mode). It returns +nil+ if an EOF is
+    # encountered before anything can be read. Fewer than +length+ bytes are
+    # returned if an EOF is encountered during the read. In the case of an
+    # integer length, the resulting string is always in ASCII-8BIT encoding.
+    #
+    # If +length+ is omitted or is +nil+, it reads until EOF and the encoding
+    # conversion is applied, if applicable. A string is returned even if EOF is
+    # encountered before any data is read.
+    #
+    # If +length+ is zero, it returns an empty string.
+    #
+    # If the optional +outbuf+ argument is present, it must reference a String,
+    # which will receive the data. The +outbuf+ will contain only the received
+    # data after the method call even if it is not empty at the beginning.
+    #
+    # When this method is called at end of file, it returns +nil+ or an emtpy
+    # string, depending on length: +read+, +read(nil)+, and +read(0)+ return and
+    # empty string, +read(positive_integer)+ returns +nil+.
+    #
+    # If a block is given, consecutive decoded chunks from the I/O stream are
+    # yielded to the block and the number of bytes read is returned.
+    #
+    # @param length [Integer, nil]
+    # @param outbuf [String, nil]
+    # @return [String]
+    # @yieldparam [String] chunk
+    # @yieldreturn [Integer] the number of bytes read
+    # @raise [ArgumentError] if +length+ is negative or isn't a multiple of 3
+    # @raise [Ob64::DecodingError] if the I/O stream cannot be decoded
     def read(length = nil, outbuf: nil)
       raise ArgumentError, "negative length #{length} given" if length.to_i.negative?
       raise ArgumentError, "length must be multiple of 3" unless (length.to_i % 3).zero?
