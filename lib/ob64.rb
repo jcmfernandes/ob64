@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
 require_relative "ob64/version"
+require_relative "ob64/errors"
 require_relative "ob64_ext"
+require_relative "ob64/reader"
 
 # Methods for base64-encoding and -decoding strings.
 module Ob64
@@ -20,7 +22,7 @@ module Ob64
   # @param bin [String]
   # @return [String]
   def encode(bin)
-    __encode(bin)
+    __encode_string(bin)
   end
 
   # Returns the Base64-decoded version of +string+.
@@ -32,7 +34,7 @@ module Ob64
   # @return [String]
   # @raise [ArgumentError] if +string+ cannot be decoded
   def decode(string)
-    __decode(string)
+    __decode_string(string)
   end
 
   # Returns the Base64-encoded version of +bin+.
@@ -46,7 +48,7 @@ module Ob64
   # @param padding [Boolean] - if the output must be padded
   # @return [String]
   def urlsafe_encode(bin, padding: true)
-    string = __encode(bin)
+    string = __encode_string(bin)
     string.chomp!("==") || string.chomp!("=") unless padding
     string.tr!("+/", "-_")
     string
@@ -71,26 +73,40 @@ module Ob64
     else
       string = string.tr("-_", "+/")
     end
-    __decode(string)
+    __decode_string(string)
   end
 
-  # Returns the length of the Base64-encoded version of +bin+.
+  # Returns the length of the Base64-encoded version of +bin_or_bytes+.
   #
-  # @param bin [String]
-  # @param padding [Boolean] - if the Base64-encoded version of +bin+ will be padded
+  # @param bin_or_bytes [String, Integer]
+  # @param padding [Boolean] - if the Base64-encoded version of +bin_or_bytes+ will be padded
   # @return [Integer]
-  def encoded_length_of(bin, padding: true)
-    __encoded_length_of(bin, padding)
+  def encoded_length_of(bin_or_bytes, padding: true)
+    case bin_or_bytes
+    when String
+      __encoded_length_of_string(bin_or_bytes, padding)
+    when Integer
+      __encoded_length_of_bytes(bin_or_bytes, padding)
+    else
+      raise ArgumentError, "unsupported type"
+    end
   end
 
-  # Returns the length of the Base64-decoded version of +string+.
+  # Returns the length of the Base64-decoded version of +string_or_bytes+.
   #
-  # ArgumentError is raised if +string+ has an invalid length.
+  # ArgumentError is raised if +string_or_bytes+ has or is an invalid length.
   #
-  # @param string [String]
+  # @param string_or_bytes [String, Integer]
   # @return [Integer]
-  # @raise [ArgumentError] if +string+ has an invalid length
-  def decoded_length_of(string)
-    __decoded_length_of(string)
+  # @raise [ArgumentError] if +string_or_bytes+ has an invalid length
+  def decoded_length_of(string_or_bytes)
+    case string_or_bytes
+    when String
+      __decoded_length_of_string(string_or_bytes)
+    when Integer
+      __decoded_length_of_bytes(string_or_bytes)
+    else
+      raise ArgumentError, "unsupported type"
+    end
   end
 end
