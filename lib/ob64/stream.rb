@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Ob64
-  # An abstract class.
+  # @abstract
   class Stream
     include Ob64::LibBase64
 
@@ -13,7 +13,7 @@ module Ob64
 
     # Initializes the instance.
     #
-    # @raise [NotImplementedError] if +Ob64::Stream.new+ is called
+    # @raise [NotImplementedError] if attempting to initialize an instance of +Ob64::Stream+
     def initialize(io)
       raise NotImplementedError, "abstract class" if instance_of?(Stream)
 
