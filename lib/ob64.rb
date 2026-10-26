@@ -5,11 +5,11 @@ require_relative "ob64_ext"
 
 # Methods for base64-encoding and -decoding strings.
 module Ob64
-  # The glue between Ruby and libbase64. See +../ext/libbase64/ob64/ob64_ext.c+.
-  module LibBase64; end
+  # The glue between Ruby and the C codecs. See +../ext/ob64/ob64_ext.c+.
+  module Ext; end
 
-  include LibBase64
-  extend LibBase64
+  include Ext
+  extend Ext
 
   module_function
 
@@ -20,7 +20,7 @@ module Ob64
   # @param bin [String]
   # @return [String]
   def encode(bin)
-    __encode(bin)
+    __encode(bin, false, true)
   end
 
   # Returns the Base64-decoded version of +string+.
@@ -28,11 +28,16 @@ module Ob64
   # ArgumentError is raised if +string+ is incorrectly padded or contains
   # non-alphabet characters. Note that CR or LF are also rejected.
   #
+  # With +loose+, the padding character is optional: both correctly-padded
+  # and unpadded input are accepted. Incorrectly-padded input is still
+  # rejected.
+  #
   # @param string [String]
+  # @param loose [Boolean] - if unpadded input is accepted
   # @return [String]
   # @raise [ArgumentError] if +string+ cannot be decoded
-  def decode(string)
-    __decode(string)
+  def decode(string, loose: false)
+    __decode(string, false, loose)
   end
 
   # Returns the Base64-encoded version of +bin+.
@@ -46,10 +51,7 @@ module Ob64
   # @param padding [Boolean] - if the output must be padded
   # @return [String]
   def urlsafe_encode(bin, padding: true)
-    string = __encode(bin)
-    string.chomp!("==") || string.chomp!("=") unless padding
-    string.tr!("+/", "-_")
-    string
+    __encode(bin, true, padding)
   end
 
   # Returns the Base64-decoded version of +string+.
@@ -65,13 +67,7 @@ module Ob64
   # @return [String]
   # @raise [ArgumentError] if +string+ cannot be decoded
   def urlsafe_decode(string)
-    if !string.end_with?("=") && string.length % 4 != 0
-      string = string.ljust((string.length + 3) & ~3, "=")
-      string.tr!("-_", "+/")
-    else
-      string = string.tr("-_", "+/")
-    end
-    __decode(string)
+    __decode(string, true, true)
   end
 
   # Returns the length of the Base64-encoded version of +bin+.
@@ -92,5 +88,33 @@ module Ob64
   # @raise [ArgumentError] if +string+ has an invalid length
   def decoded_length_of(string)
     __decoded_length_of(string)
+  end
+
+  # Returns the smallest input size, in bytes, at which each SIMD codec is
+  # used, or +nil+ if never. Lists only the codecs this CPU can run.
+  # Below every size, plain C is used.
+  #
+  # The size is the input length when encoding, and +input_length * 3 / 4+
+  # when decoding. The codec with the largest size <= the input's wins.
+  # Applies to {encode}, {decode}, {urlsafe_encode} and {urlsafe_decode}.
+  #
+  # @return [Hash{Symbol => Integer, nil}] keys among +:avx2+, +:avx512+, +:neon64+
+  def codec_routing
+    __codec_routing
+  end
+
+  # Sets the smallest input size at which SIMD codecs are used.
+  # See {codec_routing}.
+  #
+  # Codecs left out keep their size. Known codecs this CPU cannot run are
+  # ignored, so the same routing works on every machine.
+  #
+  # @param routing [Hash{Symbol => Integer, nil}] keys among +:avx2+, +:avx512+, +:neon64+
+  # @raise [TypeError] if +routing+ is not a Hash
+  # @raise [ArgumentError] for an unknown codec, a size that is not +nil+ or
+  #   a non-negative Integer, or two runnable codecs with the same size;
+  #   the routing is then left unchanged
+  def codec_routing=(routing)
+    __set_codec_routing(routing)
   end
 end

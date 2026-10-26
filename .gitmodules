@@ -1,3 +1,0 @@
-[submodule "vendor/libbase64"]
-	path = vendor/libbase64
-	url = https://github.com/jcmfernandes/base64-cmake

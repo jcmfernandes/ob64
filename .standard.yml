@@ -5,6 +5,5 @@ format: progress
 ignore:
   - 'benchmark.rb'
   - 'ext/**/*'
-  - 'vendor/**/*'
   - 'spec/**/*':
     - Layout/AlignHash

@@ -44,6 +44,32 @@ RSpec.describe Ob64 do
     expect { Ob64.decode("/////////w") }.to raise_error(ArgumentError)
   end
 
+  specify ".decode rejects non-zero trailing bits" do
+    expect { Ob64.decode("AB==") }.to raise_error(ArgumentError, "invalid base64")
+    expect { Ob64.decode("AAB=") }.to raise_error(ArgumentError, "invalid base64")
+  end
+
+  describe ".decode with loose: true" do
+    example "accepts padded and unpadded input" do
+      expect(Ob64.decode("", loose: true)).to eq("")
+      expect(Ob64.decode("AA==", loose: true)).to eq("\0")
+      expect(Ob64.decode("AA", loose: true)).to eq("\0")
+      expect(Ob64.decode("AAA=", loose: true)).to eq("\0\0")
+      expect(Ob64.decode("AAA", loose: true)).to eq("\0\0")
+      expect(Ob64.decode("AAAA", loose: true)).to eq("\0\0\0")
+      expect(Ob64.decode("AAAAAA", loose: true)).to eq("\0\0\0\0")
+      expect(Ob64.decode("//////8", loose: true)).to eq(in_ascii("\377\377\377\377\377"))
+      expect(Ob64.decode("/////////w", loose: true)).to eq(in_ascii("\377\377\377\377\377\377\377"))
+    end
+
+    example "rejects bad padding, non-zero trailing bits and non-alphabet characters" do
+      ["A", "AAAAA", "AA=", "AAA==", "AAAA=", "AA=A", "A===", "====", "AA==AA",
+        "AB", "AB==", "AAB", "AAB=", "AAAA-_", "AA\nAA", "AA AA"].each do |string|
+        expect { Ob64.decode(string, loose: true) }.to raise_error(ArgumentError, "invalid base64"), string.inspect
+      end
+    end
+  end
+
   describe ".urlsafe_encode" do
     example "with padding" do
       expect(Ob64.urlsafe_encode("")).to eq("")
@@ -86,6 +112,18 @@ RSpec.describe Ob64 do
     expect(Ob64.urlsafe_decode("AAAAAA")).to eq("\0\0\0\0")
     expect(Ob64.urlsafe_decode("______8")).to eq(in_ascii("\377\377\377\377\377"))
     expect(Ob64.urlsafe_decode("_________w")).to eq(in_ascii("\377\377\377\377\377\377\377"))
+  end
+
+  specify ".urlsafe_decode accepts the standard alphabet" do
+    expect(Ob64.urlsafe_decode("+/+/")).to eq(in_ascii("\xFB\xFF\xBF"))
+    expect(Ob64.urlsafe_decode("-_+/AA")).to eq(in_ascii("\xFB\xFF\xBF\x00"))
+  end
+
+  specify ".urlsafe_decode rejects bad padding, non-zero trailing bits and non-alphabet characters" do
+    ["A", "AAAAA", "AA=", "AAA==", "AAAA=", "AA=A", "AA==AA", "AB", "AB==", "AAB", "AAB=",
+      "AA\nAA", "AA AA", "AA.A"].each do |string|
+      expect { Ob64.urlsafe_decode(string) }.to raise_error(ArgumentError, "invalid base64"), string.inspect
+    end
   end
 
   describe ".encoded_length_of" do

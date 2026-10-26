@@ -17,8 +17,6 @@ Gem::Specification.new do |spec|
   # The `git ls-files -z` loads the files in the RubyGem that have been added into git.
   spec.files = Dir.chdir(File.expand_path(__dir__)) do
     `git ls-files -z`.split("\x0").reject { |f| f.match(%r{\A(?:test|spec|features)/}) }
-  end + Dir.chdir(File.join(File.expand_path(__dir__), "vendor", "libbase64")) do
-    `git ls-files -z`.split("\x0").reject { |f| f.match(%r{\A(?:test|spec|features)/}) }.map! { |f| "vendor/libbase64/#{f}" }
   end
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/ob64/extconf.rb"]
@@ -30,5 +28,5 @@ Gem::Specification.new do |spec|
     "source_code_uri" => spec.homepage + "/tree/v#{spec.version}"
   }
 
-  spec.required_ruby_version = Gem::Requirement.new(">= 2.5.0")
+  spec.required_ruby_version = Gem::Requirement.new(">= 3.3.0")
 end
