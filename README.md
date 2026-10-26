@@ -10,11 +10,9 @@ How fast? Try it yourself, execute:
 
     $ rake benchmark
 
-When compared to Ruby's own `Base64` module, expect a 4x speedup in encoding, and a 2x speedup in decoding. YMMV.
-
 ## Acknowledgements
 
-Ob64 uses `libbase64` under the hood. Originally developed by [aklomp](https://github.com/aklomp), here we started from [BurningEnlightenment](https://github.com/BurningEnlightenment)'s fork. `libbase64` takes advantage of SIMD (AVX2, NEON, AArch64/NEON, SSSE3, SSE4.1, SSE4.2, AVX) acceleration available on x86, x86-64, and ARM systems.
+The SIMD codecs (AVX2, AVX512, NEON64) derive from [aklomp/base64](https://github.com/aklomp/base64).
 
 ## Installation
 
@@ -32,9 +30,7 @@ Or install it yourself as:
 
     $ gem install ob64
 
-Requires CMake and a C99 compiler.
-
-**WARNING:** Only tested on Linux and x86-64.
+Requires Ruby >= 3.3 and GCC or Clang. Linux on x86-64 and AArch64.
 
 ## Usage
 
@@ -50,14 +46,42 @@ puts "Same? #{bin1 == bin2}"
 # "Same? true"
 ```
 
-If you want to replace Ruby's own `Base64` module with Ob64 **(NOT RECOMMENDED!)**:
+Decode input with or without padding:
+
+```ruby
+Ob64.decode("VGhpcyBpcyBkYXRhIQ", loose: true)
+```
+
+Bad padding, non-zero trailing bits and non-alphabet characters still raise `ArgumentError`.
+
+### Codec routing
+
+SIMD codecs are used from a minimum input size, in bytes. Below it, plain C runs.
+
+```ruby
+Ob64.codec_routing
+# x86-64 with AVX512 => {avx2: 128, avx512: 1280}
+# x86-64 with AVX2   => {avx2: 128}
+# AArch64            => {neon64: 128}
+# other              => {}
+
+Ob64.codec_routing = {avx2: 256, avx512: nil}
+```
+
+* Keys: `:avx2`, `:avx512`, `:neon64`. Value: smallest size at which the codec is used; `nil`: never.
+* Routing applies only to `Ob64.*` and `m0`. Line-wrapped `m` and `u` always use plain C.
+* Size is the input length when encoding, `input_length * 3 / 4` when decoding.
+* The codec with the largest value <= size wins.
+* The getter lists only codecs this CPU runs. The setter merges, and ignores known keys this CPU can't run.
+* Raises `TypeError` for a non-Hash, `ArgumentError` for unknown keys, invalid values or equal values on two runnable codecs.
+
+### `pack` / `unpack`
 
 ```ruby
 require "ob64/core_ext"
-# It does NOT replace:
-#   - Base64.encode64
-#   - Base64.decode64
 ```
+
+Patches `Array#pack`, `String#unpack` and `String#unpack1`. Fast only for single-directive formats `m`, `mN`, `m*`, `u`, `uN`, `u*`. Everything else runs Ruby's own code. Passing `buffer:`, `offset:`, a block, or a non-String first element also runs Ruby's own code. Output is identical to Ruby's.
 
 See [YARD documentation](http://www.rubydoc.info/gems/ob64).
 
@@ -77,10 +101,8 @@ Bug reports and pull requests are welcome on GitHub at https://github.com/jcmfer
 
 ## TODO
 
-* URL-safe encoding/decoding using separate alphabet/tables
 * Streaming interface
 * RFC 2045 (MIME) encoding/decoding
-* Make the OpenMP threshold configurable (and enable OpenMP acceleration)
 * Windows support
 
 ## License
@@ -107,9 +129,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-### libbase64
+### aklomp/base64
 
-Released under the BSD 2-clause License. See [LICENSE](https://github.com/jcmfernandes/base64-cmake/blob/feature/cmake/LICENSE).
+Released under the BSD 2-clause License. See [LICENSE](https://github.com/aklomp/base64/blob/master/LICENSE).
 
 Copyright (c) 2005-2007, Nick Galbreath  
 Copyright (c) 2013-2019, Alfred Klomp  

@@ -4,6 +4,7 @@ source "https://rubygems.org"
 
 gemspec
 
+gem "base64"
 gem "benchmark-ips"
 gem "byebug"
 gem "guard"

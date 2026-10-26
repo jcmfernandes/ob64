@@ -7,24 +7,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby: ['2.5', '2.6', '2.7', '3.0']
-    runs-on: ubuntu-latest
+        ruby: ['3.3', '3.4', '4.0']
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: repository checkout
-        uses: actions/checkout@v2
-        with:
-          submodules: true
+        uses: actions/checkout@v4
 
       - name: load ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
-
-      - name: RubyGems, Bundler Update
-        run: gem update --system --no-document --conservative
-
-      - name: bundle install
-        run: bundle install --path .bundle/gems --without development
+          bundler-cache: true
 
       - name: compile
         run: bundle exec rake compile
