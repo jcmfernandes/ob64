@@ -89,6 +89,7 @@ jobs:
             require "ob64"
             require "ob64/core_ext"
             s = Random.bytes(4096)
-            abort "Ob64 round trip failed" unless Ob64.decode(Ob64.encode(s)) == s
+            abort "Base64 round trip failed" unless Ob64::Base64.decode(Ob64::Base64.encode(s)) == s
+            abort "UU round trip failed" unless Ob64::UU.decode(Ob64::UU.encode(s)) == s
             abort "pack round trip failed" unless [s].pack("m0").unpack1("m0") == s
           '

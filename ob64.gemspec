@@ -10,8 +10,8 @@ Gem::Specification.new do |spec|
   spec.email = ["joao.fernandes@ist.utl.pt"]
   spec.homepage = "https://github.com/jcmfernandes/ob64"
   spec.license = "MIT"
-  spec.summary = "A fast Base64 encoder and decoder."
-  spec.description = "A fast Base64 encoder and decoder that makes use of SIMD extensions."
+  spec.summary = "A fast Base64 and uuencode encoder and decoder."
+  spec.description = "A fast Base64 and uuencode encoder and decoder that makes use of SIMD extensions."
 
   # Specify which files should be added to the gem when it is released.
   # The `git ls-files -z` loads the files in the RubyGem that have been added into git.

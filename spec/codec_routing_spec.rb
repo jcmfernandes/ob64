@@ -172,15 +172,15 @@ RSpec.describe "Ob64.codec_routing" do
             encoded = NATIVE_PACK.bind_call([bin], "m0")
             urlsafe = encoded.tr("+/", "-_")
 
-            check(mismatches, "encode(#{size})", encoded, Ob64.encode(bin))
-            check(mismatches, "urlsafe_encode(#{size})", urlsafe, Ob64.urlsafe_encode(bin))
+            check(mismatches, "encode(#{size})", encoded, Ob64::Base64.encode(bin))
+            check(mismatches, "urlsafe_encode(#{size})", urlsafe, Ob64::Base64.urlsafe_encode(bin))
             check(mismatches, "urlsafe_encode(#{size}, padding: false)", urlsafe.delete("="),
-              Ob64.urlsafe_encode(bin, padding: false))
-            check(mismatches, "decode(#{size})", bin, Ob64.decode(encoded))
-            check(mismatches, "decode(#{size}, loose: true)", bin, Ob64.decode(encoded, loose: true))
-            check(mismatches, "decode(#{size} unpadded, loose: true)", bin, Ob64.decode(encoded.delete("="), loose: true))
-            check(mismatches, "urlsafe_decode(#{size})", bin, Ob64.urlsafe_decode(urlsafe))
-            check(mismatches, "urlsafe_decode(#{size} unpadded)", bin, Ob64.urlsafe_decode(urlsafe.delete("=")))
+              Ob64::Base64.urlsafe_encode(bin, padding: false))
+            check(mismatches, "decode(#{size})", bin, Ob64::Base64.decode(encoded))
+            check(mismatches, "decode(#{size}, loose: true)", bin, Ob64::Base64.decode(encoded, loose: true))
+            check(mismatches, "decode(#{size} unpadded, loose: true)", bin, Ob64::Base64.decode(encoded.delete("="), loose: true))
+            check(mismatches, "urlsafe_decode(#{size})", bin, Ob64::Base64.urlsafe_decode(urlsafe))
+            check(mismatches, "urlsafe_decode(#{size} unpadded)", bin, Ob64::Base64.urlsafe_decode(urlsafe.delete("=")))
           end
           expect(mismatches).to be_empty, mismatches.first(20).join("\n")
         end
@@ -191,13 +191,13 @@ RSpec.describe "Ob64.codec_routing" do
             encoded = NATIVE_PACK.bind_call([rng.bytes(size)], "m0").b
             corruptions(rng, encoded).each do |string|
               check(mismatches, "decode(#{string.inspect[0, 100]})",
-                outcome { NATIVE_UNPACK1.bind_call(string, "m0") }, outcome { Ob64.decode(string) })
+                outcome { NATIVE_UNPACK1.bind_call(string, "m0") }, outcome { Ob64::Base64.decode(string) })
               check(mismatches, "decode(#{string.inspect[0, 100]}, loose: true)",
-                outcome { loose_decode(string) }, outcome { Ob64.decode(string, loose: true) })
+                outcome { loose_decode(string) }, outcome { Ob64::Base64.decode(string, loose: true) })
             end
             corruptions(rng, encoded.tr("+/", "-_")).each do |string|
               check(mismatches, "urlsafe_decode(#{string.inspect[0, 100]})",
-                outcome { urlsafe_decode(string) }, outcome { Ob64.urlsafe_decode(string) })
+                outcome { urlsafe_decode(string) }, outcome { Ob64::Base64.urlsafe_decode(string) })
             end
           end
           expect(mismatches).to be_empty, mismatches.first(20).join("\n")

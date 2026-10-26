@@ -4,7 +4,7 @@
 [![CI](https://github.com/jcmfernandes/ob64/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/jcmfernandes/ob64/actions/workflows/main.yml)
 [![Yard Docs](https://img.shields.io/badge/yard-docs-blue.svg)](http://www.rubydoc.info/gems/ob64/0.5.0)
 
-A *fast* Base64 encoder and decoder as a Ruby gem.
+A *fast* Base64 and uuencode encoder and decoder as a Ruby gem.
 
 How fast? Try it yourself, execute:
 
@@ -36,12 +36,16 @@ Requires Ruby >= 3.3 and GCC or Clang. Linux on x86-64 and AArch64.
 
 ```ruby
 require "ob64"
+```
 
+### Base64
+
+```ruby
 bin1 = "This is data!"
-string = Ob64.encode(bin1)
+string = Ob64::Base64.encode(bin1)
 # string = "VGhpcyBpcyBkYXRhIQ=="
 
-bin2 = Ob64.decode(string)
+bin2 = Ob64::Base64.decode(string)
 puts "Same? #{bin1 == bin2}"
 # "Same? true"
 ```
@@ -49,18 +53,23 @@ puts "Same? #{bin1 == bin2}"
 Decode input with or without padding:
 
 ```ruby
-Ob64.decode("VGhpcyBpcyBkYXRhIQ", loose: true)
+Ob64::Base64.decode("VGhpcyBpcyBkYXRhIQ", loose: true)
 ```
 
 Bad padding, non-zero trailing bits and non-alphabet characters still raise `ArgumentError`.
 
-uuencode, same output as `pack("u")` / `unpack1("u")`:
+URL-safe alphabet: `Ob64::Base64.urlsafe_encode(bin, padding: false)`, `Ob64::Base64.urlsafe_decode(string)`.
+
+### uuencode
+
+Same output as `pack("u")` / `unpack1("u")`:
 
 ```ruby
-Ob64.uuencode("This is data!")
-# => "-5&AI<R!I<R!D871A(0``\n"
-Ob64.uudecode("-5&AI<R!I<R!D871A(0``\n")
-# => "This is data!"
+string = Ob64::UU.encode("This is data!")
+# string = "-5&AI<R!I<R!D871A(0``\n"
+
+Ob64::UU.decode(string)
+# "This is data!"
 ```
 
 ### Codec routing
@@ -78,7 +87,7 @@ Ob64.codec_routing = {avx2: 256, avx512: nil}
 ```
 
 * Keys: `:avx2`, `:avx512`, `:neon64`. Value: smallest size at which the codec is used; `nil`: never.
-* Routing applies only to `Ob64.*` and `m0`. Line-wrapped `m` and `u` always use plain C.
+* Routing applies only to `Ob64::Base64` and `m0`. Line-wrapped `m` and `u` always use plain C.
 * Size is the input length when encoding, `input_length * 3 / 4` when decoding.
 * The codec with the largest value <= size wins.
 * The getter lists only codecs this CPU runs. The setter merges, and ignores known keys this CPU can't run.

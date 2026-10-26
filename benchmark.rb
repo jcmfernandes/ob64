@@ -59,7 +59,7 @@ encode_benchmark do
     end
 
     x.report("ob64 .encode") do
-      Ob64.encode($unencoded)
+      Ob64::Base64.encode($unencoded)
     end
 
     x.compare!
@@ -76,7 +76,7 @@ decode_benchmark do
     end
 
     x.report("ob64 .decode") do
-      Ob64.decode($encoded)
+      Ob64::Base64.decode($encoded)
     end
 
     x.compare!
@@ -93,7 +93,7 @@ encode_benchmark do
     end
 
     x.report("ob64 .urlsafe_encode") do
-      Ob64.urlsafe_encode($unencoded)
+      Ob64::Base64.urlsafe_encode($unencoded)
     end
 
     x.compare!
@@ -110,7 +110,7 @@ decode_benchmark do
     end
 
     x.report("ob64 .urlsafe_decode") do
-      Ob64.urlsafe_decode($encoded)
+      Ob64::Base64.urlsafe_decode($encoded)
     end
 
     x.compare!
