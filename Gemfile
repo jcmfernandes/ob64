@@ -5,7 +5,7 @@ source "https://rubygems.org"
 gemspec
 
 gem "benchmark-ips"
-gem "byebug"
+gem "debug"
 gem "guard"
 gem "guard-rspec"
 gem "rake", "~> 13.0"
