@@ -1,5 +1,4 @@
 #include <limits.h>
-#include <string.h>
 #include "ob64.h"
 #include "pack_uuencode.h"
 #include "ruby/encoding.h"
@@ -55,14 +54,7 @@ uuencode(VALUE from, long line_len)
   VALUE res = rb_str_buf_new((plen + 2) / 3 * 4 + lines * 2);
   const char *src = RSTRING_PTR(from);
   char *out = RSTRING_PTR(res);
-  size_t n = 0;
-
-  while (plen > 0) {
-    long todo = plen > line_len ? line_len : plen;
-    n += pack_uuencode_encode(src, (size_t)todo, out + n);
-    src += todo;
-    plen -= todo;
-  }
+  size_t n = pack_uuencode_lines(src, (size_t)plen, out, (size_t)line_len);
   RB_GC_GUARD(from);
 
   return ascii_result(res, n);
@@ -110,73 +102,16 @@ Ob64_pack(int argc, VALUE *argv, VALUE ary)
   return ascii_result(res, n);
 }
 
-/* len * 3 / 4 without overflow: no input decodes to more */
-static long
-uudecode_cap(long len)
-{
-  return len / 4 * 3 + len % 4 * 3 / 4;
-}
-
-/*
- * Walks uuencoded s like native unpack("u") and returns the decoded length.
- * Decodes into out unless NULL; out needs uudecode_cap(len) + 3 bytes.
- */
-static long
-uudecode_walk(const unsigned char *s, long len, char *out)
-{
-  const unsigned char *send = s + len;
-  long cap = uudecode_cap(len);
-  long total = 0;
-
-  while (s < send && *s > ' ' && *s < 'a') {
-    long line_len = (*s++ - ' ') & 077;
-
-    total += line_len;
-    if (total > cap) {
-      line_len -= total - cap;
-      total = cap;
-    }
-
-    if (line_len > 0) {
-      long enc_bytes = (line_len + 2) / 3 * 4;
-      long avail = 0;
-
-      while (avail < enc_bytes && s + avail < send && s[avail] >= ' ' && s[avail] < 'a') {
-        avail++;
-      }
-
-      if (out && avail == enc_bytes) {
-        pack_uuencode_decode((const char *)s, (size_t)enc_bytes, out);
-      }
-      else if (out) {
-        /* Missing or invalid chars decode as 0 */
-        char encbuf[84];
-        memcpy(encbuf, s, avail);
-        memset(encbuf + avail, ' ', enc_bytes - avail);
-        pack_uuencode_decode(encbuf, (size_t)enc_bytes, out);
-      }
-      s += avail;
-      if (out) out += line_len;
-    }
-
-    if (s < send && *s != '\r' && *s != '\n') s++; /* possible checksum byte */
-    if (s < send && *s == '\r') s++;
-    if (s < send && *s == '\n') s++;
-  }
-
-  return total;
-}
-
 static VALUE
 uudecode(VALUE str)
 {
   long len = RSTRING_LEN(str);
   /* +3: the decoder stores up to 3 bytes past a line's decoded length */
-  VALUE buf = rb_str_buf_new(uudecode_cap(len) + 3);
-  long total = uudecode_walk((const unsigned char *)RSTRING_PTR(str), len, RSTRING_PTR(buf));
+  VALUE buf = rb_str_buf_new((long)pack_uudecode_cap((size_t)len) + 3);
+  size_t total = pack_uudecode_lines(RSTRING_PTR(str), (size_t)len, RSTRING_PTR(buf));
   RB_GC_GUARD(str);
 
-  rb_str_set_len(buf, total);
+  rb_str_set_len(buf, (long)total);
 
   return buf;
 }
@@ -270,10 +205,10 @@ static VALUE
 Ob64_uudecoded_length_of(VALUE self, VALUE string)
 {
   StringValue(string);
-  long total = uudecode_walk((const unsigned char *)RSTRING_PTR(string), RSTRING_LEN(string), NULL);
+  size_t total = pack_uudecode_lines(RSTRING_PTR(string), (size_t)RSTRING_LEN(string), NULL);
   RB_GC_GUARD(string);
 
-  return LONG2NUM(total);
+  return LONG2NUM((long)total);
 }
 
 void

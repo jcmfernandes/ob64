@@ -11,7 +11,7 @@ RSpec.describe "Ob64.codec_routing" do
     flags = File.foreach("/proc/cpuinfo").find { |line| line.start_with?("flags") }.to_s.split
     defaults = {}
     defaults[:avx2] = 128 if flags.include?("avx2")
-    defaults[:avx512] = 1280 if flags.include?("avx512vl") && flags.include?("avx512vbmi")
+    defaults[:avx512] = 1280 if flags.include?("avx512vl") && flags.include?("avx512vbmi") && flags.include?("avx512_vbmi2")
     defaults
   end
 

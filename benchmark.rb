@@ -1,13 +1,19 @@
 require "benchmark/ips"
 require "securerandom"
 
+NATIVE_PACK = Array.instance_method(:pack)
+NATIVE_UNPACK1 = String.instance_method(:unpack1)
+
 require "ob64"
+require "ob64/core_ext"
 require "base64"
 
 $run_encode_benchmark = true
 $run_decode_benchmark = true
 $run_urlsafe_encode_benchmark = true
 $run_urlsafe_decode_benchmark = true
+$run_m_benchmark = true
+$run_u_benchmark = true
 
 def to_size(bytes)
   bytes >= 2**20 ? "#{bytes / 2**20} MB" : "#{bytes / 2**10} kB"
@@ -116,3 +122,69 @@ decode_benchmark do
     x.compare!
   end
 end if $run_urlsafe_decode_benchmark
+
+encode_benchmark do
+  Benchmark.ips do |x|
+    x.time = 5
+    x.warmup = 2
+
+    x.report("native pack(\"m\")") do
+      NATIVE_PACK.bind_call([$unencoded], "m")
+    end
+
+    x.report("ob64 pack(\"m\")") do
+      [$unencoded].pack("m")
+    end
+
+    x.compare!
+  end
+
+  $encoded_m = NATIVE_PACK.bind_call([$unencoded], "m")
+  Benchmark.ips do |x|
+    x.time = 5
+    x.warmup = 2
+
+    x.report("native unpack1(\"m\")") do
+      NATIVE_UNPACK1.bind_call($encoded_m, "m")
+    end
+
+    x.report("ob64 unpack1(\"m\")") do
+      $encoded_m.unpack1("m")
+    end
+
+    x.compare!
+  end
+end if $run_m_benchmark
+
+encode_benchmark do
+  Benchmark.ips do |x|
+    x.time = 5
+    x.warmup = 2
+
+    x.report("native pack(\"u\")") do
+      NATIVE_PACK.bind_call([$unencoded], "u")
+    end
+
+    x.report("ob64 UU.encode") do
+      Ob64::UU.encode($unencoded)
+    end
+
+    x.compare!
+  end
+
+  $encoded_u = NATIVE_PACK.bind_call([$unencoded], "u")
+  Benchmark.ips do |x|
+    x.time = 5
+    x.warmup = 2
+
+    x.report("native unpack1(\"u\")") do
+      NATIVE_UNPACK1.bind_call($encoded_u, "u")
+    end
+
+    x.report("ob64 UU.decode") do
+      Ob64::UU.decode($encoded_u)
+    end
+
+    x.compare!
+  end
+end if $run_u_benchmark

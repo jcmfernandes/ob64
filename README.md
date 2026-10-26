@@ -86,8 +86,10 @@ Ob64.codec_routing
 Ob64.codec_routing = {avx2: 256, avx512: nil}
 ```
 
+AVX512 needs VL, VBMI and VBMI2.
+
 * Keys: `:avx2`, `:avx512`, `:neon64`. Value: smallest size at which the codec is used; `nil`: never.
-* Routing applies only to `Ob64::Base64` and `m0`. Line-wrapped `m` and `u` always use plain C.
+* Routing applies to `Ob64::Base64`, `Ob64::UU`, `m0`, `m` and `u`.
 * Size is the input length when encoding, `input_length * 3 / 4` when decoding.
 * The codec with the largest value <= size wins.
 * The getter lists only codecs this CPU runs. The setter merges, and ignores known keys this CPU can't run.

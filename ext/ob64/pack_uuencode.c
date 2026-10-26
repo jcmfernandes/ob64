@@ -15,6 +15,7 @@
 
 #include "pack_uuencode.h"
 #include "pack_generic.h"
+#include "pack_simd.h"
 
 /* ======================================================================
  * Lookup tables
@@ -1459,19 +1460,11 @@ static const uint32_t uu_dec_32bit_d3[256] = {
 
 #endif
 
-/* ======================================================================
- * Public API
- * ====================================================================== */
-
-size_t
-pack_uuencode_encode(const char *src, size_t srclen, char *out)
+/* Encodes slen bytes, chars only; returns the char count */
+static size_t
+uu_encode_raw(const uint8_t *s, size_t slen, uint8_t *o)
 {
-    const uint8_t *s = (const uint8_t *)src;
-    uint8_t *o = (uint8_t *)out;
-    size_t slen = srclen;
-
-    /* Length byte */
-    *o++ = uu_enc_6bit[slen & 0x3F];
+    uint8_t *start = o;
 
 #if PACK_WORDSIZE == 64
     /* 64-bit inner loop: reads 8 bytes, consumes 6, produces 8 */
@@ -1507,7 +1500,68 @@ pack_uuencode_encode(const char *src, size_t srclen, char *out)
         *o++ = uu_enc_6bit[0];  /* padding */
     }
 
+    return (size_t)(o - start);
+}
+
+/* ======================================================================
+ * Public API
+ * ====================================================================== */
+
+size_t
+pack_uuencode_encode(const char *src, size_t srclen, char *out)
+{
+    uint8_t *o = (uint8_t *)out;
+
+    /* Length byte */
+    *o++ = uu_enc_6bit[srclen & 0x3F];
+    o += uu_encode_raw((const uint8_t *)src, srclen, o);
     *o++ = '\n';
+    return (size_t)(o - (uint8_t *)out);
+}
+
+#define PACK_UU_SCRATCH 4096
+
+size_t
+pack_uuencode_lines(const char *src, size_t srclen, char *out, size_t line_len)
+{
+    pack_bulk_loop loop = pack_simd_enc_loop(srclen);
+    const uint8_t *s = (const uint8_t *)src;
+    uint8_t *o = (uint8_t *)out;
+
+    if (loop) {
+        size_t chars = line_len / 3 * 4;
+        size_t lines_per_batch = PACK_UU_SCRATCH / chars;
+        uint8_t buf[PACK_UU_SCRATCH];
+
+        while (srclen >= line_len) {
+            size_t lines = srclen / line_len;
+            if (lines > lines_per_batch) lines = lines_per_batch;
+            size_t len = lines * line_len;
+
+            const uint8_t *bs = s;
+            size_t bslen = len, olen = 0;
+            uint8_t *bo = buf;
+            loop(&bs, &bslen, &bo, &olen, PACK_ALPHABET_UU);
+            uu_encode_raw(bs, bslen, bo);
+
+            for (size_t i = 0; i < lines; i++) {
+                *o++ = uu_enc_6bit[line_len];
+                memcpy(o, buf + i * chars, chars);
+                o += chars;
+                *o++ = '\n';
+            }
+            s += len;
+            srclen -= len;
+        }
+    }
+
+    while (srclen > 0) {
+        size_t todo = srclen < line_len ? srclen : line_len;
+        o += pack_uuencode_encode((const char *)s, todo, (char *)o);
+        s += todo;
+        srclen -= todo;
+    }
+
     return (size_t)(o - (uint8_t *)out);
 }
 
@@ -1558,4 +1612,129 @@ pack_uuencode_decode(const char *src, size_t srclen, char *out)
     }
 
     return (size_t)(o - (uint8_t *)out);
+}
+
+size_t
+pack_uudecode_cap(size_t srclen)
+{
+    return srclen / 4 * 3 + srclen % 4 * 3 / 4;
+}
+
+struct uu_walk {
+    const uint8_t *s;
+    const uint8_t *send;
+    uint8_t *out;      /* NULL: length only */
+    size_t total;
+    size_t cap;
+};
+
+/* Runs one iteration of native unpack("u")'s line loop; returns 0 when the loop ends */
+static int
+uu_walk_line(struct uu_walk *w)
+{
+    const uint8_t *s = w->s;
+    const uint8_t *send = w->send;
+
+    if (s >= send || *s <= ' ' || *s >= 'a') return 0;
+
+    size_t line_len = (*s++ - ' ') & 077;
+
+    w->total += line_len;
+    if (w->total > w->cap) {
+        line_len -= w->total - w->cap;
+        w->total = w->cap;
+    }
+
+    if (line_len > 0) {
+        size_t enc_bytes = (line_len + 2) / 3 * 4;
+        size_t lim = (size_t)(send - s) < enc_bytes ? (size_t)(send - s) : enc_bytes;
+        size_t avail = 0;
+
+        while (avail < lim && s[avail] >= ' ' && s[avail] < 'a') {
+            avail++;
+        }
+
+        if (w->out && avail == enc_bytes) {
+            pack_uuencode_decode((const char *)s, enc_bytes, (char *)w->out);
+        }
+        else if (w->out) {
+            /* Missing or invalid chars decode as 0 */
+            char encbuf[84];
+            memcpy(encbuf, s, avail);
+            memset(encbuf + avail, ' ', enc_bytes - avail);
+            pack_uuencode_decode(encbuf, enc_bytes, (char *)w->out);
+        }
+        s += avail;
+        if (w->out) w->out += line_len;
+    }
+
+    if (s < send && *s != '\r' && *s != '\n') s++; /* possible checksum byte */
+    if (s < send && *s == '\r') s++;
+    if (s < send && *s == '\n') s++;
+    w->s = s;
+
+    return 1;
+}
+
+/* Decodes n chars of whole groups; 0 if any char is invalid */
+static int
+uu_decode_batch(pack_bulk_loop loop, const uint8_t *src, size_t n, uint8_t *out)
+{
+    const uint8_t *s = src;
+    size_t slen = n, olen = 0;
+    uint8_t *o = out;
+
+    loop(&s, &slen, &o, &olen, PACK_ALPHABET_UU);
+    for (size_t i = 0; i < slen; i++) {
+        if (s[i] < 0x20 || s[i] > 0x60) return 0;
+    }
+    pack_uuencode_decode((const char *)s, slen, (char *)o);
+    return 1;
+}
+
+size_t
+pack_uudecode_lines(const char *src, size_t srclen, char *out)
+{
+    struct uu_walk w = {
+        (const uint8_t *)src, (const uint8_t *)src + srclen, (uint8_t *)out, 0, pack_uudecode_cap(srclen)
+    };
+    pack_bulk_loop loop = out ? pack_simd_dec_loop(srclen * 3 / 4) : NULL;
+
+    if (loop) {
+        uint8_t buf[PACK_UU_SCRATCH];
+
+        for (;;) {
+            struct uu_walk start = w;
+            size_t n = 0;
+
+            /* Gather normal lines: a multiple of 3 bytes, data directly followed by '\n' */
+            while (w.s < w.send && *w.s > ' ' && *w.s < 'a') {
+                size_t len = (*w.s - ' ') & 077;
+                size_t enc = len / 3 * 4;
+
+                if (len == 0 || len % 3 || (size_t)(w.send - w.s) <= enc + 1 || w.s[enc + 1] != '\n' ||
+                    w.total + len > w.cap || n + enc > sizeof(buf)) {
+                    break;
+                }
+                memcpy(buf + n, w.s + 1, enc);
+                n += enc;
+                w.s += enc + 2;
+                w.total += len;
+            }
+
+            if (n > 0) {
+                if (!uu_decode_batch(loop, buf, n, w.out)) {
+                    /* Invalid char: plain C from the batch's first line to the end */
+                    w = start;
+                    break;
+                }
+                w.out += n / 4 * 3;
+                continue;
+            }
+            if (!uu_walk_line(&w)) return w.total;
+        }
+    }
+
+    while (uu_walk_line(&w)) {}
+    return w.total;
 }

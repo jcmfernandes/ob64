@@ -5,7 +5,8 @@
 - **Breaking:** Drop CMake and libbase64. Require GCC or Clang.
 - **Breaking:** Base64 methods move from `Ob64` to `Ob64::Base64` (e.g. `Ob64.encode` is now `Ob64::Base64.encode`).
 - **Breaking:** `decode` and `urlsafe_decode` reject non-zero trailing bits (e.g. `"AB=="`), like `unpack1("m0")`.
-- Port SIMD codecs (AVX2, AVX512, NEON64) into the extension.
+- Port SIMD codecs (AVX2, AVX512, NEON64) into the extension. They also run line-wrapped `m` and `u`.
+- AVX512 requires VBMI2.
 - Add `Ob64.codec_routing` and `Ob64.codec_routing=`.
 - Add `Ob64::Base64.decode(string, loose: true)`.
 - Add `Ob64::UU.encode`, `Ob64::UU.decode`, `Ob64::UU.encoded_length_of` and `Ob64::UU.decoded_length_of`.

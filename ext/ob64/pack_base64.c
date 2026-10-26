@@ -48,6 +48,7 @@
 
 #include "pack_base64.h"
 #include "pack_generic.h"
+#include "pack_simd.h"
 
 /* EOF markers */
 #define BASE64_AEOF 1
@@ -82,9 +83,20 @@ struct base64_state {
 typedef void (*base64_enc_fn) BASE64_ENC_PARAMS;
 typedef int  (*base64_dec_fn) BASE64_DEC_PARAMS;
 
+/*
+ * Copies the standard-alphabet chars of whole blocks of [*s, end) to dst, in
+ * order, dropping all other bytes. Stops before a block holding '=', when
+ * fewer than a block is left, or when dst has less than a block of room.
+ * Advances *s past the blocks consumed; returns the chars written.
+ */
+typedef size_t (*base64_filter_fn)(const uint8_t **s, const uint8_t *end, uint8_t *dst, size_t dstcap);
+
 struct codec {
 	base64_enc_fn enc;
 	base64_dec_fn dec;
+	pack_bulk_loop enc_loop;
+	pack_bulk_loop dec_loop;
+	base64_filter_fn filter;
 };
 
 /* Default minimum sizes, in bytes, at which the SIMD codecs are used */
@@ -101,11 +113,32 @@ static _Atomic size_t codec_min_sizes[PACK_BASE64_CODECS] = {
 };
 
 static void
-codec_enable (enum pack_base64_codec codec, base64_enc_fn enc, base64_dec_fn dec, size_t min_size)
+codec_enable (enum pack_base64_codec codec, base64_enc_fn enc, base64_dec_fn dec,
+	pack_bulk_loop enc_loop, pack_bulk_loop dec_loop, base64_filter_fn filter, size_t min_size)
 {
 	codecs[codec].enc = enc;
 	codecs[codec].dec = dec;
+	codecs[codec].enc_loop = enc_loop;
+	codecs[codec].dec_loop = dec_loop;
+	codecs[codec].filter = filter;
 	atomic_store_explicit(&codec_min_sizes[codec], min_size, memory_order_relaxed);
+}
+
+/* For an 8-bit keep mask, the indexes of its set bits, packed from the low byte */
+static uint64_t filter_shuffles[256];
+
+static void
+filter_shuffles_init (void)
+{
+	for (int m = 0; m < 256; m++) {
+		uint64_t v = 0;
+		int k = 0;
+
+		for (int i = 0; i < 8; i++) {
+			if (m & (1 << i)) v |= (uint64_t)i << (8 * k++);
+		}
+		filter_shuffles[m] = v;
+	}
 }
 
 /* ======================================================================
@@ -147,6 +180,16 @@ base64_table_enc_6bit_url[] =
 	"abcdefghijklmnopqrstuvwxyz"
 	"0123456789"
 	"-_";
+
+/* uuencode 6-bit encoding table: 0 is '`', 1-63 are '!' to '_' */
+static const uint8_t
+uu_table_enc_6bit[64] =
+{
+	0x60, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+	0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+	0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F,
+	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,
+};
 
 /* URL-safe 8-bit decoding table: '-' (0x2D) = 62, '_' (0x5F) = 63.
  * '+' and '/' are accepted too, as the AVX2 decoder does; the other SIMD
@@ -3395,7 +3438,7 @@ base64_stream_decode_plain BASE64_DEC_PARAMS
 #  define BASE64_TARGET_AVX512
 #else
 #  define BASE64_TARGET_AVX2   __attribute__((target("avx2")))
-#  define BASE64_TARGET_AVX512 __attribute__((target("avx512vl,avx512vbmi")))
+#  define BASE64_TARGET_AVX512 __attribute__((target("avx512vl,avx512vbmi,avx512vbmi2")))
 #endif
 
 /* ------ AVX2 encoder helpers (with target attribute) ------ */
@@ -3424,8 +3467,13 @@ avx2_enc_reshuffle (const __m256i input)
 
 BASE64_TARGET_AVX2
 static PACK_FORCE_INLINE __m256i
-avx2_enc_translate (const __m256i in, const __m256i lut)
+avx2_enc_translate (const __m256i in, const __m256i lut, const int uu)
 {
+	if (uu) {
+		const __m256i t = _mm256_add_epi8(in, _mm256_set1_epi8(0x20));
+		return _mm256_add_epi8(t, _mm256_and_si256(_mm256_cmpeq_epi8(in, _mm256_setzero_si256()), _mm256_set1_epi8(0x40)));
+	}
+
 	__m256i indices = _mm256_subs_epu8(in, _mm256_set1_epi8(51));
 	const __m256i mask = _mm256_cmpgt_epi8(in, _mm256_set1_epi8(25));
 	indices = _mm256_sub_epi8(indices, mask);
@@ -3435,12 +3483,12 @@ avx2_enc_translate (const __m256i in, const __m256i lut)
 
 BASE64_TARGET_AVX2
 static PACK_FORCE_INLINE void
-enc_loop_avx2_inner_first (const uint8_t **s, uint8_t **o, const __m256i lut)
+enc_loop_avx2_inner_first (const uint8_t **s, uint8_t **o, const __m256i lut, const int uu)
 {
 	__m256i src = _mm256_loadu_si256((__m256i *) *s);
 	src = _mm256_permutevar8x32_epi32(src, _mm256_setr_epi32(0, 0, 1, 2, 3, 4, 5, 6));
 	src = avx2_enc_reshuffle(src);
-	src = avx2_enc_translate(src, lut);
+	src = avx2_enc_translate(src, lut, uu);
 	_mm256_storeu_si256((__m256i *) *o, src);
 	*s += 20;
 	*o += 32;
@@ -3448,14 +3496,60 @@ enc_loop_avx2_inner_first (const uint8_t **s, uint8_t **o, const __m256i lut)
 
 BASE64_TARGET_AVX2
 static PACK_FORCE_INLINE void
-enc_loop_avx2_inner (const uint8_t **s, uint8_t **o, const __m256i lut)
+enc_loop_avx2_inner (const uint8_t **s, uint8_t **o, const __m256i lut, const int uu)
 {
 	__m256i src = _mm256_loadu_si256((__m256i *) *s);
 	src = avx2_enc_reshuffle(src);
-	src = avx2_enc_translate(src, lut);
+	src = avx2_enc_translate(src, lut, uu);
 	_mm256_storeu_si256((__m256i *) *o, src);
 	*s += 24;
 	*o += 32;
+}
+
+/* Needs *slen >= 32; uu picks the uuencode translation */
+BASE64_TARGET_AVX2
+static PACK_FORCE_INLINE void
+enc_loop_avx2_rounds (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen,
+	const __m256i lut, const int uu)
+{
+	size_t rounds = (*slen - 4) / 24;
+	*slen -= rounds * 24;
+	*olen += rounds * 32;
+
+	enc_loop_avx2_inner_first(s, o, lut, uu);
+	rounds--;
+
+	while (rounds > 0) {
+		if (rounds >= 8) {
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			rounds -= 8;
+			continue;
+		}
+		if (rounds >= 4) {
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			rounds -= 4;
+			continue;
+		}
+		if (rounds >= 2) {
+			enc_loop_avx2_inner(s, o, lut, uu);
+			enc_loop_avx2_inner(s, o, lut, uu);
+			rounds -= 2;
+			continue;
+		}
+		enc_loop_avx2_inner(s, o, lut, uu);
+		break;
+	}
+	*s += 4;
 }
 
 BASE64_TARGET_AVX2
@@ -3465,6 +3559,10 @@ enc_loop_avx2 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int f
 	if (*slen < 32) {
 		return;
 	}
+	if (flags & PACK_ALPHABET_UU) {
+		enc_loop_avx2_rounds(s, slen, o, olen, _mm256_setzero_si256(), 1);
+		return;
+	}
 	const __m256i lut = (flags & PACK_BASE64_URL_SAFE)
 		? _mm256_setr_epi8(
 			65, 71, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -17, 32, 0, 0,
@@ -3472,45 +3570,7 @@ enc_loop_avx2 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int f
 		: _mm256_setr_epi8(
 			65, 71, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -19, -16, 0, 0,
 			65, 71, -4, -4, -4, -4, -4, -4, -4, -4, -4, -4, -19, -16, 0, 0);
-
-	size_t rounds = (*slen - 4) / 24;
-	*slen -= rounds * 24;
-	*olen += rounds * 32;
-
-	enc_loop_avx2_inner_first(s, o, lut);
-	rounds--;
-
-	while (rounds > 0) {
-		if (rounds >= 8) {
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			rounds -= 8;
-			continue;
-		}
-		if (rounds >= 4) {
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			rounds -= 4;
-			continue;
-		}
-		if (rounds >= 2) {
-			enc_loop_avx2_inner(s, o, lut);
-			enc_loop_avx2_inner(s, o, lut);
-			rounds -= 2;
-			continue;
-		}
-		enc_loop_avx2_inner(s, o, lut);
-		break;
-	}
-	*s += 4;
+	enc_loop_avx2_rounds(s, slen, o, olen, lut, 0);
 }
 
 /* ------ AVX2 decoder helpers ------ */
@@ -3529,21 +3589,43 @@ avx2_dec_reshuffle (const __m256i in)
 	return _mm256_permutevar8x32_epi32(out, _mm256_setr_epi32(0, 1, 2, 4, 5, 6, -1, -1));
 }
 
+/* Nibble LUTs: a standard-alphabet char c has lut_lo[c & 0xF] & lut_hi[c >> 4] == 0 */
+static const int8_t avx2_dec_lut_lo[32] = {
+	0x15, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+	0x11, 0x11, 0x13, 0x1A, 0x1B, 0x1B, 0x1B, 0x1A,
+	0x15, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+	0x11, 0x11, 0x13, 0x1A, 0x1B, 0x1B, 0x1B, 0x1A,
+};
+
+static const int8_t avx2_dec_lut_hi[32] = {
+	0x10, 0x10, 0x01, 0x02, 0x04, 0x08, 0x04, 0x08,
+	0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
+	0x10, 0x10, 0x01, 0x02, 0x04, 0x08, 0x04, 0x08,
+	0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
+};
+
 BASE64_TARGET_AVX2
 static PACK_FORCE_INLINE int
-dec_loop_avx2_inner (const uint8_t **s, uint8_t **o, size_t *rounds, int flags)
+dec_loop_avx2_inner (const uint8_t **s, uint8_t **o, size_t *rounds, int flags, const int uu)
 {
-	const __m256i lut_lo = _mm256_setr_epi8(
-		0x15, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
-		0x11, 0x11, 0x13, 0x1A, 0x1B, 0x1B, 0x1B, 0x1A,
-		0x15, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
-		0x11, 0x11, 0x13, 0x1A, 0x1B, 0x1B, 0x1B, 0x1A);
+	if (uu) {
+		/* Valid: c - 0x20 <= 0x40 unsigned; decodes to (c - 0x20) & 0x3F */
+		const __m256i x  = _mm256_sub_epi8(_mm256_loadu_si256((__m256i *) *s), _mm256_set1_epi8(0x20));
+		const __m256i ok = _mm256_cmpeq_epi8(_mm256_min_epu8(x, _mm256_set1_epi8(0x40)), x);
 
-	const __m256i lut_hi = _mm256_setr_epi8(
-		0x10, 0x10, 0x01, 0x02, 0x04, 0x08, 0x04, 0x08,
-		0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10,
-		0x10, 0x10, 0x01, 0x02, 0x04, 0x08, 0x04, 0x08,
-		0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10);
+		if (_mm256_movemask_epi8(ok) != -1) {
+			return 0;
+		}
+		_mm256_storeu_si256((__m256i *) *o, avx2_dec_reshuffle(_mm256_and_si256(x, _mm256_set1_epi8(0x3F))));
+
+		*s += 32;
+		*o += 24;
+		*rounds -= 1;
+		return 1;
+	}
+
+	const __m256i lut_lo = _mm256_loadu_si256((const __m256i *) avx2_dec_lut_lo);
+	const __m256i lut_hi = _mm256_loadu_si256((const __m256i *) avx2_dec_lut_hi);
 
 	const __m256i lut_roll = _mm256_setr_epi8(
 		0,  16,  19,   4, -65, -65, -71, -71,
@@ -3586,6 +3668,53 @@ dec_loop_avx2_inner (const uint8_t **s, uint8_t **o, size_t *rounds, int flags)
 	return 1;
 }
 
+/* Needs *slen >= 45; uu picks the uuencode alphabet */
+BASE64_TARGET_AVX2
+static PACK_FORCE_INLINE void
+dec_loop_avx2_rounds (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags, const int uu)
+{
+	size_t rounds = (*slen - 13) / 32;
+	*slen -= rounds * 32;
+	*olen += rounds * 24;
+
+	do {
+		if (rounds >= 8) {
+			if (dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu)) {
+				continue;
+			}
+			break;
+		}
+		if (rounds >= 4) {
+			if (dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu)) {
+				continue;
+			}
+			break;
+		}
+		if (rounds >= 2) {
+			if (dec_loop_avx2_inner(s, o, &rounds, flags, uu) &&
+			    dec_loop_avx2_inner(s, o, &rounds, flags, uu)) {
+				continue;
+			}
+			break;
+		}
+		dec_loop_avx2_inner(s, o, &rounds, flags, uu);
+		break;
+	} while (rounds > 0);
+
+	*slen += rounds * 32;
+	*olen -= rounds * 24;
+}
+
 BASE64_TARGET_AVX2
 static inline void
 dec_loop_avx2 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
@@ -3593,46 +3722,56 @@ dec_loop_avx2 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int f
 	if (*slen < 45) {
 		return;
 	}
-	size_t rounds = (*slen - 13) / 32;
-	*slen -= rounds * 32;
-	*olen += rounds * 24;
+	if (flags & PACK_ALPHABET_UU) {
+		dec_loop_avx2_rounds(s, slen, o, olen, flags, 1);
+		return;
+	}
+	dec_loop_avx2_rounds(s, slen, o, olen, flags, 0);
+}
 
-	do {
-		if (rounds >= 8) {
-			if (dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags)) {
-				continue;
-			}
-			break;
-		}
-		if (rounds >= 4) {
-			if (dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags)) {
-				continue;
-			}
-			break;
-		}
-		if (rounds >= 2) {
-			if (dec_loop_avx2_inner(s, o, &rounds, flags) &&
-			    dec_loop_avx2_inner(s, o, &rounds, flags)) {
-				continue;
-			}
-			break;
-		}
-		dec_loop_avx2_inner(s, o, &rounds, flags);
-		break;
-	} while (rounds > 0);
+BASE64_TARGET_AVX2
+static size_t
+filter_avx2 (const uint8_t **s, const uint8_t *end, uint8_t *dst, size_t dstcap)
+{
+	const __m256i lut_lo = _mm256_loadu_si256((const __m256i *) avx2_dec_lut_lo);
+	const __m256i lut_hi = _mm256_loadu_si256((const __m256i *) avx2_dec_lut_hi);
+	const __m256i mask_2F = _mm256_set1_epi8(0x2F);
+	uint8_t *o = dst;
 
-	*slen += rounds * 32;
-	*olen -= rounds * 24;
+	while (end - *s >= 32 && (size_t)(dst + dstcap - o) >= 32) {
+		const __m256i str = _mm256_loadu_si256((const __m256i *) *s);
+
+		if (_mm256_movemask_epi8(_mm256_cmpeq_epi8(str, _mm256_set1_epi8('=')))) break;
+
+		const __m256i hi_nibbles = _mm256_and_si256(_mm256_srli_epi32(str, 4), mask_2F);
+		const __m256i lo_nibbles = _mm256_and_si256(str, mask_2F);
+		const __m256i bad = _mm256_and_si256(_mm256_shuffle_epi8(lut_lo, lo_nibbles),
+			_mm256_shuffle_epi8(lut_hi, hi_nibbles));
+		const uint32_t keep = (uint32_t)_mm256_movemask_epi8(_mm256_cmpeq_epi8(bad, _mm256_setzero_si256()));
+
+		if (keep == 0xFFFFFFFF) {
+			_mm256_storeu_si256((__m256i *) o, str);
+			o += 32;
+		}
+		else {
+			const __m128i halves[2] = { _mm256_castsi256_si128(str), _mm256_extracti128_si256(str, 1) };
+
+			for (int h = 0; h < 2; h++) {
+				const uint32_t m0 = (keep >> (16 * h)) & 0xFF;
+				const uint32_t m1 = (keep >> (16 * h + 8)) & 0xFF;
+				const __m128i shuf = _mm_set_epi64x(
+					(long long)(filter_shuffles[m1] + 0x0808080808080808ULL), (long long)filter_shuffles[m0]);
+				const __m128i packed = _mm_shuffle_epi8(halves[h], shuf);
+
+				_mm_storel_epi64((__m128i *) o, packed);
+				o += __builtin_popcount(m0);
+				_mm_storel_epi64((__m128i *) o, _mm_unpackhi_epi64(packed, packed));
+				o += __builtin_popcount(m1);
+			}
+		}
+		*s += 32;
+	}
+	return (size_t)(o - dst);
 }
 
 /* ------ AVX2 stream encode/decode ------ */
@@ -3821,7 +3960,8 @@ enc_loop_avx512 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int
 	const __m512i shuffle = _mm512_loadu_si512(avx512_enc_shuffle_input);
 	const __m512i shifts  = _mm512_loadu_si512(avx512_enc_multishift);
 	const __m512i lookup  = _mm512_loadu_si512(
-		(flags & PACK_BASE64_URL_SAFE) ? base64_table_enc_6bit_url : base64_table_enc_6bit);
+		(flags & PACK_ALPHABET_UU) ? uu_table_enc_6bit
+		: (flags & PACK_BASE64_URL_SAFE) ? base64_table_enc_6bit_url : base64_table_enc_6bit);
 
 	size_t rounds = (*slen - 24) / 48;
 	*slen -= rounds * 48;
@@ -3906,6 +4046,29 @@ static const int8_t avx512_dec_lut_hi_url[64] = {
 	  49,   50,   51, -128, -128, -128, -128, -128,
 };
 
+/* uuencode AVX512 decode LUTs: 0x20-0x60 decode to (c - 0x20) & 0x3F */
+static const int8_t avx512_dec_lut_lo_uu[64] = {
+	-128, -128, -128, -128, -128, -128, -128, -128,
+	-128, -128, -128, -128, -128, -128, -128, -128,
+	-128, -128, -128, -128, -128, -128, -128, -128,
+	-128, -128, -128, -128, -128, -128, -128, -128,
+	   0,    1,    2,    3,    4,    5,    6,    7,
+	   8,    9,   10,   11,   12,   13,   14,   15,
+	  16,   17,   18,   19,   20,   21,   22,   23,
+	  24,   25,   26,   27,   28,   29,   30,   31,
+};
+
+static const int8_t avx512_dec_lut_hi_uu[64] = {
+	  32,   33,   34,   35,   36,   37,   38,   39,
+	  40,   41,   42,   43,   44,   45,   46,   47,
+	  48,   49,   50,   51,   52,   53,   54,   55,
+	  56,   57,   58,   59,   60,   61,   62,   63,
+	   0, -128, -128, -128, -128, -128, -128, -128,
+	-128, -128, -128, -128, -128, -128, -128, -128,
+	-128, -128, -128, -128, -128, -128, -128, -128,
+	-128, -128, -128, -128, -128, -128, -128, -128,
+};
+
 static const int8_t avx512_dec_pack_shuf[64] = {
 	 2,  1,  0,  6,  5,  4, 10,  9,  8, 14, 13, 12,
 	18, 17, 16, 22, 21, 20, 26, 25, 24, 30, 29, 28,
@@ -3959,9 +4122,11 @@ dec_loop_avx512 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int
 		return;
 	}
 	const __m512i lookup_0     = _mm512_loadu_si512(
-		(flags & PACK_BASE64_URL_SAFE) ? avx512_dec_lut_lo_url : avx512_dec_lut_lo);
+		(flags & PACK_ALPHABET_UU) ? avx512_dec_lut_lo_uu
+		: (flags & PACK_BASE64_URL_SAFE) ? avx512_dec_lut_lo_url : avx512_dec_lut_lo);
 	const __m512i lookup_1     = _mm512_loadu_si512(
-		(flags & PACK_BASE64_URL_SAFE) ? avx512_dec_lut_hi_url : avx512_dec_lut_hi);
+		(flags & PACK_ALPHABET_UU) ? avx512_dec_lut_hi_uu
+		: (flags & PACK_BASE64_URL_SAFE) ? avx512_dec_lut_hi_url : avx512_dec_lut_hi);
 	const __m512i pack_shuffle = _mm512_loadu_si512(avx512_dec_pack_shuf);
 
 	size_t rounds = (*slen - 24) / 64;
@@ -4004,6 +4169,29 @@ dec_loop_avx512 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int
 
 	*slen += rounds * 64;
 	*olen -= rounds * 48;
+}
+
+BASE64_TARGET_AVX512
+static size_t
+filter_avx512 (const uint8_t **s, const uint8_t *end, uint8_t *dst, size_t dstcap)
+{
+	const __m512i lookup_0 = _mm512_loadu_si512(avx512_dec_lut_lo);
+	const __m512i lookup_1 = _mm512_loadu_si512(avx512_dec_lut_hi);
+	uint8_t *o = dst;
+
+	while (end - *s >= 64 && (size_t)(dst + dstcap - o) >= 64) {
+		const __m512i in = _mm512_loadu_si512((const void *) *s);
+
+		if (_mm512_cmpeq_epi8_mask(in, _mm512_set1_epi8('='))) break;
+
+		const __m512i translated = _mm512_permutex2var_epi8(lookup_0, in, lookup_1);
+		const __mmask64 keep = ~_mm512_movepi8_mask(_mm512_or_si512(translated, in));
+
+		_mm512_storeu_si512((void *) o, _mm512_maskz_compress_epi8(keep, in));
+		o += __builtin_popcountll(keep);
+		*s += 64;
+	}
+	return (size_t)(o - dst);
 }
 
 /* ------ AVX512 stream encode/decode ------ */
@@ -4171,6 +4359,9 @@ pack_base64_xgetbv (uint32_t index)
 #ifndef bit_AVX512vbmi
 #define bit_AVX512vbmi (1 << 1)
 #endif
+#ifndef bit_AVX512vbmi2
+#define bit_AVX512vbmi2 (1 << 6)
+#endif
 #ifndef bit_AVX2
 #define bit_AVX2 (1 << 5)
 #endif
@@ -4214,12 +4405,12 @@ codec_choose_x86 (void)
 					__cpuid_count(7, 0, eax, ebx, ecx, edx);
 					if (ebx & bit_AVX2) {
 						codec_enable(PACK_BASE64_AVX2, base64_stream_encode_avx2,
-							base64_stream_decode_avx2, CODEC_DEFAULT_MIN_SIZE_AVX2);
+							base64_stream_decode_avx2, enc_loop_avx2, dec_loop_avx2, filter_avx2, CODEC_DEFAULT_MIN_SIZE_AVX2);
 					}
 					if ((xcr_mask & _AVX_512_ENABLED_BY_OS) == _AVX_512_ENABLED_BY_OS) {
-						if ((ebx & bit_AVX512vl) && (ecx & bit_AVX512vbmi)) {
+						if ((ebx & bit_AVX512vl) && (ecx & bit_AVX512vbmi) && (ecx & bit_AVX512vbmi2)) {
 							codec_enable(PACK_BASE64_AVX512, base64_stream_encode_avx512,
-								base64_stream_decode_avx512, CODEC_DEFAULT_MIN_SIZE_AVX512);
+								base64_stream_decode_avx512, enc_loop_avx512, dec_loop_avx512, filter_avx512, CODEC_DEFAULT_MIN_SIZE_AVX512);
 						}
 					}
 				}
@@ -4280,6 +4471,21 @@ static const uint8_t neon64_dec_lut2_url[] = {
 	 40U,  41U,  42U,  43U,  44U,  45U,  46U,  47U,  48U,  49U,  50U,  51U, 255U, 255U, 255U, 255U,
 };
 
+/* uuencode NEON64 decode LUTs: 0x20-0x60 decode to (c - 0x20) & 0x3F */
+static const uint8_t neon64_dec_lut1_uu[] = {
+	255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U,
+	255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U,
+	  0U,   1U,   2U,   3U,   4U,   5U,   6U,   7U,   8U,   9U,  10U,  11U,  12U,  13U,  14U,  15U,
+	 16U,  17U,  18U,  19U,  20U,  21U,  22U,  23U,  24U,  25U,  26U,  27U,  28U,  29U,  30U,  31U,
+};
+
+static const uint8_t neon64_dec_lut2_uu[] = {
+	  0U,  32U,  33U,  34U,  35U,  36U,  37U,  38U,  39U,  40U,  41U,  42U,  43U,  44U,  45U,  46U,
+	 47U,  48U,  49U,  50U,  51U,  52U,  53U,  54U,  55U,  56U,  57U,  58U,  59U,  60U,  61U,  62U,
+	 63U,   0U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U,
+	255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U, 255U,
+};
+
 /* NEON64 decode loop (from neon64/dec_loop.c) */
 static inline void
 dec_loop_neon64 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
@@ -4292,9 +4498,11 @@ dec_loop_neon64 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int
 	*olen += rounds * 48;
 
 	const uint8x16x4_t tbl_dec1 = load_64byte_table(
-		(flags & PACK_BASE64_URL_SAFE) ? neon64_dec_lut1_url : neon64_dec_lut1);
+		(flags & PACK_ALPHABET_UU) ? neon64_dec_lut1_uu
+		: (flags & PACK_BASE64_URL_SAFE) ? neon64_dec_lut1_url : neon64_dec_lut1);
 	const uint8x16x4_t tbl_dec2 = load_64byte_table(
-		(flags & PACK_BASE64_URL_SAFE) ? neon64_dec_lut2_url : neon64_dec_lut2);
+		(flags & PACK_ALPHABET_UU) ? neon64_dec_lut2_uu
+		: (flags & PACK_BASE64_URL_SAFE) ? neon64_dec_lut2_url : neon64_dec_lut2);
 
 	do {
 		const uint8x16_t offset = vdupq_n_u8(63U);
@@ -4392,7 +4600,8 @@ enc_loop_neon64 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int
 	*olen += rounds * 64;
 
 	const uint8x16x4_t tbl_enc = load_64byte_table(
-		(flags & PACK_BASE64_URL_SAFE) ? base64_table_enc_6bit_url : base64_table_enc_6bit);
+		(flags & PACK_ALPHABET_UU) ? uu_table_enc_6bit
+		: (flags & PACK_BASE64_URL_SAFE) ? base64_table_enc_6bit_url : base64_table_enc_6bit);
 
 	while (rounds > 0) {
 		if (rounds >= 8) {
@@ -4424,6 +4633,46 @@ enc_loop_neon64 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int
 		enc_loop_neon64_inner(s, o, tbl_enc);
 		break;
 	}
+}
+
+static size_t
+filter_neon64 (const uint8_t **s, const uint8_t *end, uint8_t *dst, size_t dstcap)
+{
+	static const uint8_t bits[16] = { 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
+	const uint8x16_t weights = vld1q_u8(bits);
+	uint8_t *o = dst;
+
+	while (end - *s >= 16 && (size_t)(dst + dstcap - o) >= 16) {
+		const uint8x16_t in = vld1q_u8(*s);
+
+		if (vmaxvq_u8(vceqq_u8(in, vdupq_n_u8('=')))) break;
+
+		const uint8x16_t valid = vorrq_u8(
+			vorrq_u8(vcltq_u8(vsubq_u8(in, vdupq_n_u8('A')), vdupq_n_u8(26)),
+			         vcltq_u8(vsubq_u8(in, vdupq_n_u8('a')), vdupq_n_u8(26))),
+			vorrq_u8(vcltq_u8(vsubq_u8(in, vdupq_n_u8('0')), vdupq_n_u8(10)),
+			         vorrq_u8(vceqq_u8(in, vdupq_n_u8('+')), vceqq_u8(in, vdupq_n_u8('/')))));
+
+		if (vminvq_u8(valid) == 0xFF) {
+			vst1q_u8(o, in);
+			o += 16;
+		}
+		else {
+			const uint8x16_t k = vandq_u8(valid, weights);
+			const unsigned m0 = vaddv_u8(vget_low_u8(k));
+			const unsigned m1 = vaddv_u8(vget_high_u8(k));
+			const uint8x16_t shuf = vcombine_u8(vcreate_u8(filter_shuffles[m0]),
+				vcreate_u8(filter_shuffles[m1] + 0x0808080808080808ULL));
+			const uint8x16_t packed = vqtbl1q_u8(in, shuf);
+
+			vst1_u8(o, vget_low_u8(packed));
+			o += __builtin_popcount(m0);
+			vst1_u8(o, vget_high_u8(packed));
+			o += __builtin_popcount(m1);
+		}
+		*s += 16;
+	}
+	return (size_t)(o - dst);
 }
 
 /* ------ NEON64 stream encode/decode ------ */
@@ -4560,7 +4809,7 @@ static void
 codec_choose_aarch64 (void)
 {
 	codec_enable(PACK_BASE64_NEON64, base64_stream_encode_neon64,
-		base64_stream_decode_neon64, CODEC_DEFAULT_MIN_SIZE_NEON64);
+		base64_stream_decode_neon64, enc_loop_neon64, dec_loop_neon64, filter_neon64, CODEC_DEFAULT_MIN_SIZE_NEON64);
 }
 
 #endif /* aarch64 */
@@ -4580,7 +4829,7 @@ codec_choose_aarch64 (void)
  * ====================================================================== */
 
 static const struct codec codec_plain = {
-	base64_stream_encode_plain, base64_stream_decode_plain
+	base64_stream_encode_plain, base64_stream_decode_plain, NULL, NULL, NULL
 };
 
 /* Ties resolve in this order */
@@ -4605,6 +4854,18 @@ codec_for_size (size_t size)
 		}
 	}
 	return best;
+}
+
+pack_bulk_loop
+pack_simd_enc_loop (size_t size)
+{
+	return codec_for_size(size)->enc_loop;
+}
+
+pack_bulk_loop
+pack_simd_dec_loop (size_t size)
+{
+	return codec_for_size(size)->dec_loop;
 }
 
 int
@@ -4664,6 +4925,7 @@ base64_stream_encode_final (struct base64_state *state, char *out, size_t *outle
 void
 pack_base64_init (void)
 {
+	filter_shuffles_init();
 	codecs_init();
 }
 
@@ -4736,19 +4998,19 @@ pack_base64_decode (const char *src, size_t srclen, char *out, size_t *outlen, i
 }
 
 /* ======================================================================
- * RFC 2045 scalar encoder/decoder
+ * RFC 2045 encoder/decoder
  *
  * Used by the 'm' pack directive (non-strict, len != 0).
- * The encoder produces line-wrapped output; the decoder is lenient,
- * skipping whitespace and non-base64 characters.
- *
- * These are intentionally simple scalar loops using the 6-bit / 8-bit
- * lookup tables above.  The SIMD-accelerated streaming codec handles
- * the performance-critical unwrapped path instead.
+ * The encoder produces line-wrapped output, batching whole lines
+ * through the SIMD codec picked by routing; the tail is scalar.
+ * The decoder is lenient, skipping non-base64 characters: the SIMD
+ * codec's filter squeezes the alphabet chars of each block into a
+ * scratch buffer, which its decoder then decodes. A scalar loop takes
+ * over at the first block holding '=' and at the tail.
  * ====================================================================== */
 
-size_t
-pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_per_line)
+static size_t
+encode_rfc2045_plain(const char *src, size_t srclen, char *out, int bytes_per_line)
 {
     const uint8_t *s = (const uint8_t *)src;
     char *o = out;
@@ -4793,53 +5055,145 @@ pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_
     return (size_t)(o - out);
 }
 
+#define PACK_SCRATCH 4096
+
+/* Encodes srclen bytes, a multiple of 3, with the standard alphabet; returns srclen / 3 * 4 */
+static size_t
+encode_whole (const struct codec *codec, const char *src, size_t srclen, char *out)
+{
+	struct base64_state state = {0, 0, 0, 0};
+	size_t n;
+
+	codec->enc(&state, src, srclen, out, &n);
+	return n;
+}
+
+size_t
+pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_per_line)
+{
+	const struct codec *codec = codec_for_size(srclen);
+
+	bytes_per_line = bytes_per_line / 3 * 3;
+	if (bytes_per_line == 0) bytes_per_line = 45;
+	if (codec == &codec_plain) return encode_rfc2045_plain(src, srclen, out, bytes_per_line);
+
+	size_t line = (size_t)bytes_per_line;
+	size_t chars = line / 3 * 4;
+	size_t lines_per_batch = PACK_SCRATCH / chars;
+	char buf[PACK_SCRATCH];
+	char *o = out;
+
+	while (srclen >= line) {
+		size_t lines = srclen / line;
+
+		if (lines_per_batch == 0) {
+			/* Lines longer than the buffer: encode in place */
+			o += encode_whole(codec, src, line, o);
+			*o++ = '\n';
+			lines = 1;
+		}
+		else {
+			if (lines > lines_per_batch) lines = lines_per_batch;
+			encode_whole(codec, src, lines * line, buf);
+			for (size_t i = 0; i < lines; i++) {
+				memcpy(o, buf + i * chars, chars);
+				o += chars;
+				*o++ = '\n';
+			}
+		}
+		src += lines * line;
+		srclen -= lines * line;
+	}
+
+	return (size_t)(o - out) + encode_rfc2045_plain(src, srclen, o, bytes_per_line);
+}
+
+/*
+ * Native lenient m decode of [s, end), starting with nheld (0-3) alphabet
+ * chars of a group already read. Non-alphabet chars are skipped; '=' is
+ * skipped in group positions 1-2 and ends decoding in positions 3-4.
+ */
+static PACK_FORCE_INLINE size_t
+decode_rfc2045_from (const uint8_t *s, const uint8_t *end, uint8_t *out, const uint8_t *held, size_t nheld)
+{
+	uint8_t *o = out;
+	uint8_t a = 0, b = 0, c = 0, d;
+
+	if (nheld >= 1) a = base64_table_dec_8bit[held[0]];
+	if (nheld >= 2) {
+		b = base64_table_dec_8bit[held[1]];
+		*o++ = (uint8_t)((a << 2) | (b >> 4));
+	}
+	if (nheld >= 3) {
+		c = base64_table_dec_8bit[held[2]];
+		*o++ = (uint8_t)((b << 4) | (c >> 2));
+	}
+	switch (nheld) {
+	case 1: goto second;
+	case 2: goto third;
+	case 3: goto fourth;
+	}
+
+	while (s < end) {
+		while (s < end && (a = base64_table_dec_8bit[*s]) >= 254) s++;
+		if (s >= end) break;
+		s++;
+second:
+		while (s < end && (b = base64_table_dec_8bit[*s]) >= 254) s++;
+		if (s >= end) break;
+		s++;
+		*o++ = (uint8_t)((a << 2) | (b >> 4));
+third:
+		while (s < end && (c = base64_table_dec_8bit[*s]) >= 254) {
+			if (c == 254) goto done;
+			s++;
+		}
+		if (s >= end) break;
+		s++;
+		*o++ = (uint8_t)((b << 4) | (c >> 2));
+fourth:
+		while (s < end && (d = base64_table_dec_8bit[*s]) >= 254) {
+			if (d == 254) goto done;
+			s++;
+		}
+		if (s >= end) break;
+		s++;
+		*o++ = (uint8_t)((c << 6) | d);
+	}
+
+done:
+	return (size_t)(o - out);
+}
+
 size_t
 pack_base64_decode_rfc2045(const char *src, size_t srclen, char *out)
 {
-    const uint8_t *s = (const uint8_t *)src;
-    const uint8_t *end = s + srclen;
-    uint8_t *o = (uint8_t *)out;
+	const struct codec *codec = codec_for_size(srclen * 3 / 4);
+	const uint8_t *s = (const uint8_t *)src;
+	const uint8_t *end = s + srclen;
+	uint8_t *o = (uint8_t *)out;
+	uint8_t buf[PACK_SCRATCH + 64];
+	size_t n = 0;
 
-    while (s < end) {
-        uint8_t a, b, c, d;
+	/* nheld == 0 folds the resume entry away */
+	if (!codec->filter) return decode_rfc2045_from(s, end, o, NULL, 0);
 
-        /* Read first valid char ('=' is skipped here and in the second) */
-        while (s < end && (a = base64_table_dec_8bit[*s]) >= 254) {
-            s++;
-        }
-        if (s >= end) break;
-        s++;
+	for (;;) {
+		const uint8_t *before = s;
 
-        /* Read second valid char */
-        while (s < end && (b = base64_table_dec_8bit[*s]) >= 254) {
-            s++;
-        }
-        if (s >= end) break;
-        s++;
+		n += codec->filter(&s, end, buf + n, sizeof(buf) - n);
 
-        *o++ = (a << 2) | (b >> 4);
+		/* Alphabet chars only: decoding cannot fail */
+		size_t whole = n / 4 * 4;
+		struct base64_state state = {0, 0, 0, 0};
+		size_t nout;
+		codec->dec(&state, (const char *)buf, whole, (char *)o, &nout);
+		o += nout;
+		memmove(buf, buf + whole, n - whole);
+		n -= whole;
 
-        /* Read third valid char */
-        while (s < end && (c = base64_table_dec_8bit[*s]) >= 254) {
-            if (c == 254) goto done;
-            s++;
-        }
-        if (s >= end) break;
-        s++;
+		if (s == before) break;
+	}
 
-        *o++ = (b << 4) | (c >> 2);
-
-        /* Read fourth valid char */
-        while (s < end && (d = base64_table_dec_8bit[*s]) >= 254) {
-            if (d == 254) goto done;
-            s++;
-        }
-        if (s >= end) break;
-        s++;
-
-        *o++ = (c << 6) | d;
-    }
-
-done:
-    return (size_t)(o - (uint8_t *)out);
+	return (size_t)(o - (uint8_t *)out) + decode_rfc2045_from(s, end, o, buf, n);
 }

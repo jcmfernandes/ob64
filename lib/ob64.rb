@@ -19,8 +19,8 @@ module Ob64
   #
   # The size is the input length when encoding, and +input_length * 3 / 4+
   # when decoding. The codec with the largest size <= the input's wins.
-  # Applies to {Base64.encode}, {Base64.decode}, {Base64.urlsafe_encode} and
-  # {Base64.urlsafe_decode}.
+  # Applies to {Base64}, {UU} and, with +ob64/core_ext+, to +pack+ and
+  # +unpack+ with +m+ and +u+.
   #
   # @return [Hash{Symbol => Integer, nil}] keys among +:avx2+, +:avx512+, +:neon64+
   def codec_routing
