@@ -3049,7 +3049,7 @@ static const uint32_t base64_table_dec_32bit_url_d3[256] = {
  * Generic 64-bit encoding loop (from generic/64/enc_loop.c)
  * ====================================================================== */
 
-static inline void
+static PACK_FORCE_INLINE void
 enc_loop_generic_64 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
 {
 	if (*slen < 8) {
@@ -3099,7 +3099,7 @@ enc_loop_generic_64 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen,
  * Generic 32-bit encoding loop (from generic/32/enc_loop.c)
  * ====================================================================== */
 
-static inline void
+static PACK_FORCE_INLINE void
 enc_loop_generic_32 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
 {
 	if (*slen < 4) {
@@ -3160,7 +3160,7 @@ dec_loop_generic_32_inner (const uint8_t **s, uint8_t **o, size_t *rounds,
 	return 1;
 }
 
-static inline void
+static PACK_FORCE_INLINE void
 dec_loop_generic_32 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
 {
 	if (*slen < 8) {
@@ -3542,7 +3542,7 @@ enc_loop_avx2_rounds (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen
 }
 
 BASE64_TARGET_AVX2
-static inline void
+static PACK_FORCE_INLINE void
 enc_loop_avx2 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
 {
 	if (*slen < 32) {
@@ -3705,7 +3705,7 @@ dec_loop_avx2_rounds (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen
 }
 
 BASE64_TARGET_AVX2
-static inline void
+static PACK_FORCE_INLINE void
 dec_loop_avx2 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
 {
 	if (*slen < 45) {
@@ -3786,6 +3786,11 @@ base64_stream_encode_avx2 BASE64_ENC_PARAMS
 		{
 		case 0:
 	enc_loop_avx2(&s, &slen, &o, &olen, state->flags);
+#if PACK_WORDSIZE == 32
+	enc_loop_generic_32(&s, &slen, &o, &olen, state->flags);
+#else
+	enc_loop_generic_64(&s, &slen, &o, &olen, state->flags);
+#endif
 
 		if (slen-- == 0) { break; }
 		*o++ = enc_table[*s >> 2];
@@ -3848,6 +3853,9 @@ base64_stream_decode_avx2 BASE64_DEC_PARAMS
 		{
 		case 0:
 	dec_loop_avx2(&s, &slen, &o, &olen, state->flags);
+#if PACK_WORDSIZE >= 32
+	dec_loop_generic_32(&s, &slen, &o, &olen, state->flags);
+#endif
 
 		if (slen-- == 0) { ret = 1; break; }
 		if ((q = dec_table[*s++]) >= 254) { st.eof = BASE64_EOF; break; }
@@ -4104,7 +4112,7 @@ dec_loop_avx512_inner (const uint8_t **s, uint8_t **o, size_t *rounds,
 }
 
 BASE64_TARGET_AVX512
-static inline void
+static PACK_FORCE_INLINE void
 dec_loop_avx512 (const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags)
 {
 	if (*slen < 88) {
@@ -4206,6 +4214,11 @@ base64_stream_encode_avx512 BASE64_ENC_PARAMS
 		{
 		case 0:
 	enc_loop_avx512(&s, &slen, &o, &olen, state->flags);
+#if PACK_WORDSIZE == 32
+	enc_loop_generic_32(&s, &slen, &o, &olen, state->flags);
+#else
+	enc_loop_generic_64(&s, &slen, &o, &olen, state->flags);
+#endif
 
 		if (slen-- == 0) { break; }
 		*o++ = enc_table[*s >> 2];
@@ -4268,6 +4281,9 @@ base64_stream_decode_avx512 BASE64_DEC_PARAMS
 		{
 		case 0:
 	dec_loop_avx512(&s, &slen, &o, &olen, state->flags);
+#if PACK_WORDSIZE >= 32
+	dec_loop_generic_32(&s, &slen, &o, &olen, state->flags);
+#endif
 
 		if (slen-- == 0) { ret = 1; break; }
 		if ((q = dec_table[*s++]) >= 254) { st.eof = BASE64_EOF; break; }
@@ -5142,25 +5158,25 @@ pack_base64_decode_rfc2045(const char *src, size_t srclen, char *out)
 	uint8_t buf[PACK_SCRATCH + 64];
 	size_t n = 0;
 
-	/* nheld == 0 folds the resume entry away */
-	if (!codec->filter) return decode_rfc2045_from(s, end, o, NULL, 0);
+	if (codec->filter) {
+		for (;;) {
+			const uint8_t *before = s;
 
-	for (;;) {
-		const uint8_t *before = s;
+			n += codec->filter(&s, end, buf + n, sizeof(buf) - n);
+			if (s == before) break;
 
-		n += codec->filter(&s, end, buf + n, sizeof(buf) - n);
-
-		/* Alphabet chars only: decoding cannot fail */
-		size_t whole = n / 4 * 4;
-		struct base64_state state = {0, 0, 0, 0};
-		size_t nout;
-		codec->dec(&state, (const char *)buf, whole, (char *)o, &nout);
-		o += nout;
-		memmove(buf, buf + whole, n - whole);
-		n -= whole;
-
-		if (s == before) break;
+			/* Alphabet chars only: decoding cannot fail */
+			size_t whole = n / 4 * 4;
+			struct base64_state state = {0, 0, 0, 0};
+			size_t nout;
+			codec->dec(&state, (const char *)buf, whole, (char *)o, &nout);
+			o += nout;
+			memmove(buf, buf + whole, n - whole);
+			n -= whole;
+		}
 	}
 
+	/* nheld == 0 folds the resume entry away */
+	if (n == 0) return (size_t)(o - (uint8_t *)out) + decode_rfc2045_from(s, end, o, NULL, 0);
 	return (size_t)(o - (uint8_t *)out) + decode_rfc2045_from(s, end, o, buf, n);
 }

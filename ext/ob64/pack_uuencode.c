@@ -1685,9 +1685,10 @@ uu_decode_batch(pack_bulk_loop loop, const uint8_t *src, size_t n, uint8_t *out)
     uint8_t *o = out;
 
     loop(&s, &slen, &o, &olen, PACK_ALPHABET_UU);
-    for (size_t i = 0; i < slen; i++) {
-        if (s[i] < 0x20 || s[i] > 0x60) return 0;
-    }
+    /* No early exit, so it vectorizes */
+    int bad = 0;
+    for (size_t i = 0; i < slen; i++) bad |= (uint8_t)(s[i] - 0x20) > 0x40;
+    if (bad) return 0;
     pack_uuencode_decode((const char *)s, slen, (char *)o);
     return 1;
 }
