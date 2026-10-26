@@ -60,11 +60,21 @@ RSpec.describe Ob64::Base64 do
       expect(Ob64::Base64.decode("AAAAAA", loose: true)).to eq("\0\0\0\0")
       expect(Ob64::Base64.decode("//////8", loose: true)).to eq(in_ascii("\377\377\377\377\377"))
       expect(Ob64::Base64.decode("/////////w", loose: true)).to eq(in_ascii("\377\377\377\377\377\377\377"))
+      expect(Ob64::Base64.decode("/w==", loose: true)).to eq(in_ascii("\377"))
+      expect(Ob64::Base64.decode("/w", loose: true)).to eq(in_ascii("\377"))
+      expect(Ob64::Base64.decode("//8=", loose: true)).to eq(in_ascii("\377\377"))
+      expect(Ob64::Base64.decode("//8", loose: true)).to eq(in_ascii("\377\377"))
+      expect(Ob64::Base64.decode("////", loose: true)).to eq(in_ascii("\377\377\377"))
+    end
+
+    example "round-trips with the padding stripped" do
+      bin = "\x01\x02\x03\x04\x05"
+      expect(Ob64::Base64.decode(Ob64::Base64.encode(bin).delete("="), loose: true)).to eq(bin)
     end
 
     example "rejects bad padding, non-zero trailing bits and non-alphabet characters" do
       ["A", "AAAAA", "AA=", "AAA==", "AAAA=", "AA=A", "A===", "====", "AA==AA",
-        "AB", "AB==", "AAB", "AAB=", "AAAA-_", "AA\nAA", "AA AA"].each do |string|
+        "AB", "AB==", "AAB", "AAB=", "AAAA-_", "AA\nAA", "AA AA", "^", "A^", "AAA^"].each do |string|
         expect { Ob64::Base64.decode(string, loose: true) }.to raise_error(ArgumentError, "invalid base64"), string.inspect
       end
     end
@@ -112,6 +122,9 @@ RSpec.describe Ob64::Base64 do
     expect(Ob64::Base64.urlsafe_decode("AAAAAA")).to eq("\0\0\0\0")
     expect(Ob64::Base64.urlsafe_decode("______8")).to eq(in_ascii("\377\377\377\377\377"))
     expect(Ob64::Base64.urlsafe_decode("_________w")).to eq(in_ascii("\377\377\377\377\377\377\377"))
+    expect(Ob64::Base64.urlsafe_decode("_w==")).to eq(in_ascii("\377"))
+    expect(Ob64::Base64.urlsafe_decode("_w")).to eq(in_ascii("\377"))
+    expect(Ob64::Base64.urlsafe_decode("__8")).to eq(in_ascii("\377\377"))
   end
 
   specify ".urlsafe_decode accepts the standard alphabet" do
