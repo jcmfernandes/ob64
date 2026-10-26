@@ -152,5 +152,22 @@ module Ob64
     def decode(string)
       __uudecode(string)
     end
+
+    # Returns the length of the uuencoded version of +bin+.
+    #
+    # @param bin [String]
+    # @return [Integer]
+    def encoded_length_of(bin)
+      __uuencoded_length_of(bin)
+    end
+
+    # Returns the length of the uudecoded version of +string+.
+    # Like {decode}, never raises for malformed input.
+    #
+    # @param string [String]
+    # @return [Integer]
+    def decoded_length_of(string)
+      __uudecoded_length_of(string)
+    end
   end
 end

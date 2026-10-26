@@ -27,4 +27,22 @@ RSpec.describe Ob64::UU do
     end
     expect { Ob64::UU.decode(1) }.to raise_error(TypeError, "no implicit conversion of Integer into String")
   end
+
+  specify ".encoded_length_of matches .encode" do
+    inputs.each do |bin|
+      expect(Ob64::UU.encoded_length_of(bin)).to eq(Ob64::UU.encode(bin).bytesize)
+    end
+    expect { Ob64::UU.encoded_length_of(1) }.to raise_error(TypeError, "no implicit conversion of Integer into String")
+  end
+
+  specify ".decoded_length_of matches .decode" do
+    encodings = inputs.map { |bin| Ob64::UU.encode(bin) }
+    truncated = encodings.reject(&:empty?).map { |enc| enc[0, rng.rand(enc.size)] }
+    garbage = Array.new(100) { rng.bytes(rng.rand(200)) }
+
+    (encodings + truncated + garbage).each do |string|
+      expect(Ob64::UU.decoded_length_of(string)).to eq(Ob64::UU.decode(string).bytesize)
+    end
+    expect { Ob64::UU.decoded_length_of(1) }.to raise_error(TypeError, "no implicit conversion of Integer into String")
+  end
 end
