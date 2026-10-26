@@ -7,6 +7,7 @@
 - Port SIMD codecs (AVX2, AVX512, NEON64) into the extension.
 - Add `Ob64.codec_routing` and `Ob64.codec_routing=`.
 - Add `Ob64.decode(string, loose: true)`.
+- Add `Ob64.uuencode` and `Ob64.uudecode`.
 - Encode and decode URL-safe in C.
 - Support Linux on AArch64.
 

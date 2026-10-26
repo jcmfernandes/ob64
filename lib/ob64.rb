@@ -3,7 +3,7 @@
 require_relative "ob64/version"
 require_relative "ob64_ext"
 
-# Methods for base64-encoding and -decoding strings.
+# Methods for base64- and uuencoding and -decoding strings.
 module Ob64
   # The glue between Ruby and the C codecs. See +../ext/ob64/ob64_ext.c+.
   module Ext; end
@@ -88,6 +88,25 @@ module Ob64
   # @raise [ArgumentError] if +string+ has an invalid length
   def decoded_length_of(string)
     __decoded_length_of(string)
+  end
+
+  # Returns the uuencoded version of +bin+, like <tt>[bin].pack("u")</tt>:
+  # lines of up to 45 input bytes, each ending in a newline.
+  #
+  # @param bin [String]
+  # @return [String]
+  def uuencode(bin)
+    __uuencode(bin)
+  end
+
+  # Returns the uudecoded version of +string+, like <tt>string.unpack1("u")</tt>.
+  # Decoding is lenient, as in Ruby: it stops at the first invalid line and
+  # never raises for malformed input.
+  #
+  # @param string [String]
+  # @return [String]
+  def uudecode(string)
+    __uudecode(string)
   end
 
   # Returns the smallest input size, in bytes, at which each SIMD codec is

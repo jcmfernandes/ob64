@@ -54,6 +54,15 @@ Ob64.decode("VGhpcyBpcyBkYXRhIQ", loose: true)
 
 Bad padding, non-zero trailing bits and non-alphabet characters still raise `ArgumentError`.
 
+uuencode, same output as `pack("u")` / `unpack1("u")`:
+
+```ruby
+Ob64.uuencode("This is data!")
+# => "-5&AI<R!I<R!D871A(0``\n"
+Ob64.uudecode("-5&AI<R!I<R!D871A(0``\n")
+# => "This is data!"
+```
+
 ### Codec routing
 
 SIMD codecs are used from a minimum input size, in bytes. Below it, plain C runs.

@@ -36,9 +36,25 @@ parse_format(VALUE fmt, long *count)
   return p[0];
 }
 
-static size_t
-uuencode(const char *src, long plen, char *out, long line_len)
+/* Sets res's length to n and makes it a US-ASCII String, as native pack does */
+static VALUE
+ascii_result(VALUE res, size_t n)
 {
+  rb_str_set_len(res, (long)n);
+  ENCODING_CODERANGE_SET(res, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
+
+  return res;
+}
+
+static VALUE
+uuencode(VALUE from, long line_len)
+{
+  long plen = RSTRING_LEN(from);
+  /* A length byte and a newline per line */
+  long lines = (plen + line_len - 1) / line_len;
+  VALUE res = rb_str_buf_new((plen + 2) / 3 * 4 + lines * 2);
+  const char *src = RSTRING_PTR(from);
+  char *out = RSTRING_PTR(res);
   size_t n = 0;
 
   while (plen > 0) {
@@ -47,8 +63,9 @@ uuencode(const char *src, long plen, char *out, long line_len)
     src += todo;
     plen -= todo;
   }
+  RB_GC_GUARD(from);
 
-  return n;
+  return ascii_result(res, n);
 }
 
 static VALUE
@@ -81,22 +98,16 @@ Ob64_pack(int argc, VALUE *argv, VALUE ary)
     else if (len > 63 && type == 'u') len = 63;
     else len = len / 3 * 3;
 
-    /* uuencode adds a length byte and a newline per line, base64 a newline */
+    if (type == 'u') return uuencode(from, len);
+
+    /* A newline per line */
     long lines = (plen + len - 1) / len;
-    res = rb_str_buf_new((plen + 2) / 3 * 4 + lines * (type == 'u' ? 2 : 1));
-    if (type == 'm') {
-      n = pack_base64_encode_rfc2045(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), (int)len);
-    }
-    else {
-      n = uuencode(RSTRING_PTR(from), plen, RSTRING_PTR(res), len);
-    }
+    res = rb_str_buf_new((plen + 2) / 3 * 4 + lines);
+    n = pack_base64_encode_rfc2045(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), (int)len);
   }
   RB_GC_GUARD(from);
 
-  rb_str_set_len(res, (long)n);
-  ENCODING_CODERANGE_SET(res, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
-
-  return res;
+  return ascii_result(res, n);
 }
 
 static VALUE
@@ -212,6 +223,22 @@ Ob64_unpack1(int argc, VALUE *argv, VALUE str)
   return res;
 }
 
+static VALUE
+Ob64_uuencode(VALUE self, VALUE bin)
+{
+  StringValue(bin);
+
+  return uuencode(bin, 45);
+}
+
+static VALUE
+Ob64_uudecode(VALUE self, VALUE string)
+{
+  StringValue(string);
+
+  return uudecode(string);
+}
+
 void
 Init_ob64_pack(VALUE mExt)
 {
@@ -221,4 +248,7 @@ Init_ob64_pack(VALUE mExt)
   rb_define_method(mPack, "pack", Ob64_pack, -1);
   rb_define_method(mUnpack, "unpack", Ob64_unpack, -1);
   rb_define_method(mUnpack, "unpack1", Ob64_unpack1, -1);
+
+  rb_define_private_method(mExt, "__uuencode", Ob64_uuencode, 1);
+  rb_define_private_method(mExt, "__uudecode", Ob64_uudecode, 1);
 }
