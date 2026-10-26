@@ -41,6 +41,8 @@ Init_ob64_ext(void)
   rb_define_private_method(mOb64_Ext, "__decoded_length_of", Ob64_decoded_length_of, 1);
   rb_define_private_method(mOb64_Ext, "__codec_routing", Ob64_codec_routing, 0);
   rb_define_private_method(mOb64_Ext, "__set_codec_routing", Ob64_set_codec_routing, 1);
+
+  Init_ob64_pack(mOb64_Ext);
 }
 
 VALUE Ob64_encode_string(VALUE self, VALUE bin, VALUE urlsafe, VALUE padding)
