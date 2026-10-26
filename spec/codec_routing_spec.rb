@@ -202,6 +202,21 @@ RSpec.describe "Ob64.codec_routing" do
           end
           expect(mismatches).to be_empty, mismatches.first(20).join("\n")
         end
+
+        it "decodes any byte in a SIMD block like native m0" do
+          mismatches = []
+          (0..255).each do |byte|
+            [0, 1, 2, 3, 100].each do |position|
+              string = ("A" * 256).b
+              string.setbyte(position, byte)
+              check(mismatches, "decode(#{byte} at #{position})",
+                outcome { NATIVE_UNPACK1.bind_call(string, "m0") }, outcome { Ob64::Base64.decode(string) })
+              check(mismatches, "urlsafe_decode(#{byte} at #{position})",
+                outcome { urlsafe_decode(string) }, outcome { Ob64::Base64.urlsafe_decode(string) })
+            end
+          end
+          expect(mismatches).to be_empty, mismatches.first(20).join("\n")
+        end
       end
     end
   end
