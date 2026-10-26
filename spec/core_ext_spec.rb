@@ -6,9 +6,6 @@ require "ob64/core_ext"
 PACK_FORMATS = ["m", *(0..101).map { |n| "m#{n}" }, "m999999999", "m*", "u", *(0..71).map { |n| "u#{n}" }, "u999999999", "u*"].freeze
 DECODE_SUBSET = %w[m m0 m3 m60 m* u u0 u5 u* m0000000000 u9].freeze
 SIZES = [*0..64, *120..136, *1272..1288].freeze
-ROUTING_KEYS = %i[avx2 avx512 neon64].freeze
-NO_ROUTING = ROUTING_KEYS.to_h { |k| [k, nil] }.freeze
-ROUTINGS = [NO_ROUTING, *Ob64.codec_routing.keys.map { |k| NO_ROUTING.merge(k => 0) }].freeze
 NATIVES = {pack: NATIVE_PACK, unpack: NATIVE_UNPACK, unpack1: NATIVE_UNPACK1}.freeze
 
 module CoreExtHelpers
@@ -76,14 +73,14 @@ RSpec.describe "ob64/core_ext" do
     expect("".method(:unpack1).owner).not_to eq(String)
   end
 
-  ROUTINGS.each do |routing|
-    describe "with routing #{routing.inspect}" do
+  Ob64.codecs.each do |codec|
+    describe "with #{codec}" do
       around do |example|
-        saved = Ob64.codec_routing
-        Ob64.codec_routing = routing
+        saved = Ob64.codec
+        Ob64.codec = codec
         example.run
       ensure
-        Ob64.codec_routing = NO_ROUTING.merge(saved)
+        Ob64.codec = saved
       end
 
       it "packs like native" do

@@ -1,23 +1,20 @@
 #include <stdbool.h>
-#include <stdint.h>
 #include "ob64.h"
-#include "ruby/thread_native.h"
 
 VALUE mOb64 = Qnil;
 VALUE mOb64_Ext = Qnil;
 
-/* Indexed by enum pack_base64_codec */
-static const char *const codec_names[PACK_BASE64_CODECS] = { "avx2", "avx512", "neon64" };
-static ID codec_ids[PACK_BASE64_CODECS];
-/* Serializes reads and updates of the codec routing */
-static rb_nativethread_lock_t codec_routing_lock;
+/* Indexed by enum pack_codec */
+static const char *const codec_names[PACK_CODECS] = { "scalar", "avx2", "avx512", "neon64" };
+static ID codec_ids[PACK_CODECS];
 
 VALUE Ob64_encode_string(VALUE self, VALUE bin, VALUE urlsafe, VALUE padding);
 VALUE Ob64_decode_string(VALUE self, VALUE string, VALUE urlsafe, VALUE loose);
 VALUE Ob64_encoded_length_of(VALUE self, VALUE bin, VALUE withPadding);
 VALUE Ob64_decoded_length_of(VALUE self, VALUE string);
-VALUE Ob64_codec_routing(VALUE self);
-VALUE Ob64_set_codec_routing(VALUE self, VALUE routing);
+VALUE Ob64_codec(VALUE self);
+VALUE Ob64_set_codec(VALUE self, VALUE codec);
+VALUE Ob64_codecs(VALUE self);
 
 size_t __encoded_length_of(size_t bin_len, bool withPadding);
 size_t __decoded_length_of(VALUE string);
@@ -27,8 +24,7 @@ Init_ob64_ext(void)
 {
   rb_ext_ractor_safe(true);
   pack_base64_init();
-  rb_nativethread_lock_initialize(&codec_routing_lock);
-  for (int i = 0; i < PACK_BASE64_CODECS; i++) {
+  for (int i = 0; i < PACK_CODECS; i++) {
     codec_ids[i] = rb_intern(codec_names[i]);
   }
 
@@ -39,8 +35,9 @@ Init_ob64_ext(void)
   rb_define_private_method(mOb64_Ext, "__decode", Ob64_decode_string, 3);
   rb_define_private_method(mOb64_Ext, "__encoded_length_of", Ob64_encoded_length_of, 2);
   rb_define_private_method(mOb64_Ext, "__decoded_length_of", Ob64_decoded_length_of, 1);
-  rb_define_private_method(mOb64_Ext, "__codec_routing", Ob64_codec_routing, 0);
-  rb_define_private_method(mOb64_Ext, "__set_codec_routing", Ob64_set_codec_routing, 1);
+  rb_define_private_method(mOb64_Ext, "__codec", Ob64_codec, 0);
+  rb_define_private_method(mOb64_Ext, "__set_codec", Ob64_set_codec, 1);
+  rb_define_private_method(mOb64_Ext, "__codecs", Ob64_codecs, 0);
 
   Init_ob64_pack(mOb64_Ext);
 }
@@ -112,90 +109,32 @@ size_t __decoded_length_of(VALUE string)
   return (3 * (string_len - padding)) / 4;
 }
 
-VALUE Ob64_codec_routing(VALUE self)
+VALUE Ob64_codec(VALUE self)
 {
-  size_t min_sizes[PACK_BASE64_CODECS];
-  VALUE routing = rb_hash_new();
-
-  rb_nativethread_lock_lock(&codec_routing_lock);
-  for (int i = 0; i < PACK_BASE64_CODECS; i++) {
-    min_sizes[i] = pack_base64_codec_min_size(i);
-  }
-  rb_nativethread_lock_unlock(&codec_routing_lock);
-
-  for (int i = 0; i < PACK_BASE64_CODECS; i++) {
-    if (pack_base64_codec_runnable(i)) {
-      rb_hash_aset(routing, ID2SYM(codec_ids[i]), min_sizes[i] == SIZE_MAX ? Qnil : SIZET2NUM(min_sizes[i]));
-    }
-  }
-
-  return routing;
+  return ID2SYM(codec_ids[pack_codec_current()]);
 }
 
-struct codec_routing_update {
-  bool given[PACK_BASE64_CODECS];
-  size_t min_sizes[PACK_BASE64_CODECS];
-};
-
-static int codec_routing_update_i(VALUE key, VALUE value, VALUE arg)
+VALUE Ob64_set_codec(VALUE self, VALUE codec)
 {
-  struct codec_routing_update *update = (struct codec_routing_update *)arg;
-  int codec = -1;
-  size_t min_size = SIZE_MAX;
-
-  for (int i = 0; i < PACK_BASE64_CODECS; i++) {
-    if (key == ID2SYM(codec_ids[i])) codec = i;
-  }
-  if (codec < 0) {
-    rb_raise(rb_eArgError, "unknown codec: %+"PRIsVALUE, key);
-  }
-
-  if (!NIL_P(value)) {
-    int sign = RB_INTEGER_TYPE_P(value) ? rb_integer_pack(value, &min_size, 1, sizeof(min_size), 0, INTEGER_PACK_NATIVE_BYTE_ORDER) : -1;
-    if ((sign != 0 && sign != 1) || min_size == SIZE_MAX) {
-      rb_raise(rb_eArgError, "invalid size for %s: %+"PRIsVALUE, codec_names[codec], value);
-    }
-  }
-
-  update->given[codec] = true;
-  update->min_sizes[codec] = min_size;
-
-  return ST_CONTINUE;
-}
-
-VALUE Ob64_set_codec_routing(VALUE self, VALUE routing)
-{
-  struct codec_routing_update update = { { false }, { 0 } };
-  size_t merged[PACK_BASE64_CODECS];
-  int clash_a = -1, clash_b = -1;
-
-  Check_Type(routing, T_HASH);
-  rb_hash_foreach(routing, codec_routing_update_i, (VALUE)&update);
-
-  /* No raising while locked */
-  rb_nativethread_lock_lock(&codec_routing_lock);
-  for (int i = 0; i < PACK_BASE64_CODECS; i++) {
-    merged[i] = update.given[i] ? update.min_sizes[i] : pack_base64_codec_min_size(i);
-  }
-  for (int i = 0; i < PACK_BASE64_CODECS && clash_a < 0; i++) {
-    for (int j = i + 1; j < PACK_BASE64_CODECS && clash_a < 0; j++) {
-      if (merged[i] != SIZE_MAX && merged[i] == merged[j] &&
-          pack_base64_codec_runnable(i) && pack_base64_codec_runnable(j)) {
-        clash_a = i;
-        clash_b = j;
+  for (int i = 0; i < PACK_CODECS; i++) {
+    if (codec == ID2SYM(codec_ids[i])) {
+      if (!pack_codec_runnable(i)) {
+        rb_raise(rb_eArgError, "%s is not supported by this CPU", codec_names[i]);
       }
+      pack_codec_set(i);
+      return codec;
     }
   }
-  if (clash_a < 0) {
-    for (int i = 0; i < PACK_BASE64_CODECS; i++) {
-      if (update.given[i]) pack_base64_set_codec_min_size(i, update.min_sizes[i]);
-    }
-  }
-  rb_nativethread_lock_unlock(&codec_routing_lock);
+  rb_raise(rb_eArgError, "unknown codec: %+"PRIsVALUE, codec);
+}
 
-  if (clash_a >= 0) {
-    rb_raise(rb_eArgError, "%s and %s have the same size: %"PRIuSIZE, codec_names[clash_a], codec_names[clash_b], merged[clash_a]);
+VALUE Ob64_codecs(VALUE self)
+{
+  VALUE codecs = rb_ary_new();
+
+  for (int i = 0; i < PACK_CODECS; i++) {
+    if (pack_codec_runnable(i)) rb_ary_push(codecs, ID2SYM(codec_ids[i]));
   }
 
-  return routing;
+  return codecs;
 }

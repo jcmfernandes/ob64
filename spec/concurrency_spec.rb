@@ -24,10 +24,10 @@ module ConcurrencyCheck
     end
   end
 
-  def self.change_routing(configs, deadline)
+  def self.change_codec(codecs, deadline)
     i = 0
     until now >= deadline
-      Ob64.codec_routing = configs[i % configs.size]
+      Ob64.codec = codecs[i % codecs.size]
       i += 1
       Thread.pass
     end
@@ -36,10 +36,6 @@ module ConcurrencyCheck
 end
 
 RSpec.describe "ob64/core_ext concurrency" do
-  keys = %i[avx2 avx512 neon64]
-  none = keys.to_h { |k| [k, nil] }
-  configs = [none, *Ob64.codec_routing.keys.flat_map { |k| [0, 64, 1280].map { |v| none.merge(k => v) } }]
-
   let(:rng) { Random.new(RSpec.configuration.seed) }
 
   # [format, binary input, native encoding, native decoding]
@@ -53,30 +49,30 @@ RSpec.describe "ob64/core_ext concurrency" do
   end
 
   around do |example|
-    saved = Ob64.codec_routing
+    saved = Ob64.codec
     example.run
   ensure
-    Ob64.codec_routing = none.merge(saved)
+    Ob64.codec = saved
   end
 
-  it "stays correct while another thread changes the routing" do
+  it "stays correct while another thread changes the codec" do
     work = cases(60)
     deadline = ConcurrencyCheck.now + 0.2
-    changer = Thread.new { ConcurrencyCheck.change_routing(configs, deadline) }
+    changer = Thread.new { ConcurrencyCheck.change_codec(Ob64.codecs, deadline) }
     workers = Array.new(4) { Thread.new { ConcurrencyCheck.mismatches(work.shuffle(random: Random.new(rng.rand(1 << 30))), deadline) } }
     expect(workers.flat_map(&:value)).to eq([])
   ensure
     changer&.join
   end
 
-  it "stays correct across Ractors while the routing changes" do
+  it "stays correct across Ractors while the codec changes" do
     work = cases(40).map { |c| Ractor.make_shareable(c) }
-    shared = Ractor.make_shareable(configs)
+    shared = Ractor.make_shareable(Ob64.codecs)
     previous = Warning[:experimental]
     Warning[:experimental] = false
     deadline = ConcurrencyCheck.now + 0.2
 
-    changer = Ractor.new(shared, deadline) { |cfgs, limit| ConcurrencyCheck.change_routing(cfgs, limit) }
+    changer = Ractor.new(shared, deadline) { |codecs, limit| ConcurrencyCheck.change_codec(codecs, limit) }
     workers = Array.new(3) { Ractor.new(work, deadline) { |data, limit| ConcurrencyCheck.mismatches(data, limit) } }
     mismatches = [changer, *workers].flat_map { |r| r.respond_to?(:value) ? r.value : r.take }
     expect(mismatches).to eq([])

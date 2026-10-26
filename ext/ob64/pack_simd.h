@@ -14,9 +14,9 @@
  */
 typedef void (*pack_bulk_loop)(const uint8_t **s, size_t *slen, uint8_t **o, size_t *olen, int flags);
 
-/* Bulk encode loop of the codec routing picks for size; NULL for plain C */
-pack_bulk_loop pack_simd_enc_loop(size_t size);
-/* Bulk decode loop of the codec routing picks for size; NULL for plain C */
-pack_bulk_loop pack_simd_dec_loop(size_t size);
+/* Bulk encode loop of the current codec; NULL for scalar */
+pack_bulk_loop pack_simd_enc_loop(void);
+/* Bulk decode loop of the current codec; NULL for scalar */
+pack_bulk_loop pack_simd_dec_loop(void);
 
 #endif /* PACK_SIMD_H */

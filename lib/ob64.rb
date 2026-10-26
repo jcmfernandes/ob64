@@ -13,33 +13,35 @@ module Ob64
 
   module_function
 
-  # Returns the smallest input size, in bytes, at which each SIMD codec is
-  # used, or +nil+ if never. Lists only the codecs this CPU can run.
-  # Below every size, plain C is used.
+  # Returns the codec used by {Base64}, {UU} and, with +ob64/core_ext+,
+  # +pack+ and +unpack+ with +m+ and +u+. Defaults to {best_codec}.
   #
-  # The size is the input length when encoding, and +input_length * 3 / 4+
-  # when decoding. The codec with the largest size <= the input's wins.
-  # Applies to {Base64}, {UU} and, with +ob64/core_ext+, to +pack+ and
-  # +unpack+ with +m+ and +u+.
-  #
-  # @return [Hash{Symbol => Integer, nil}] keys among +:avx2+, +:avx512+, +:neon64+
-  def codec_routing
-    __codec_routing
+  # @return [Symbol] one of {codecs}
+  def codec
+    __codec
   end
 
-  # Sets the smallest input size at which SIMD codecs are used.
-  # See {codec_routing}.
+  # Forces a codec for the whole process: every thread and Ractor.
   #
-  # Codecs left out keep their size. Known codecs this CPU cannot run are
-  # ignored, so the same routing works on every machine.
+  # @param codec [Symbol] one of {codecs}
+  # @return [Symbol] +codec+
+  # @raise [ArgumentError] if +codec+ is unknown or this CPU cannot run it
+  def codec=(codec)
+    __set_codec(codec)
+  end
+
+  # Returns the codecs this CPU runs, best last. +:scalar+ is plain C.
   #
-  # @param routing [Hash{Symbol => Integer, nil}] keys among +:avx2+, +:avx512+, +:neon64+
-  # @raise [TypeError] if +routing+ is not a Hash
-  # @raise [ArgumentError] for an unknown codec, a size that is not +nil+ or
-  #   a non-negative Integer, or two runnable codecs with the same size;
-  #   the routing is then left unchanged
-  def codec_routing=(routing)
-    __set_codec_routing(routing)
+  # @return [Array<Symbol>] among +:scalar+, +:avx2+, +:avx512+, +:neon64+
+  def codecs
+    __codecs
+  end
+
+  # Returns the best codec this CPU runs, the default {codec}.
+  #
+  # @return [Symbol] one of {codecs}
+  def best_codec
+    codecs.last
   end
 
   # Methods for base64-encoding and -decoding strings.

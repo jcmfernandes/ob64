@@ -34,7 +34,7 @@
   NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
   SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-  Codecs by platform, picked by input size (see codec routing below):
+  Codecs by platform, the best picked at init (see codec selection below):
     x86/x86_64: AVX512, AVX2 (runtime CPUID detection), plain C
     AArch64:    NEON64 (compile-time, mandatory on ARMv8+), plain C
     Others:     plain C only
@@ -99,29 +99,18 @@ struct codec {
 	base64_filter_fn filter;
 };
 
-/* Default minimum sizes, in bytes, at which the SIMD codecs are used */
-#define CODEC_DEFAULT_MIN_SIZE_AVX2    128
-#define CODEC_DEFAULT_MIN_SIZE_AVX512  1280
-#define CODEC_DEFAULT_MIN_SIZE_NEON64  128
-
 /* Filled in at init for the codecs this CPU runs */
-static struct codec codecs[PACK_BASE64_CODECS];
-
-/* Smallest size, in bytes, at which each codec is used; SIZE_MAX: never */
-static _Atomic size_t codec_min_sizes[PACK_BASE64_CODECS] = {
-	SIZE_MAX, SIZE_MAX, SIZE_MAX
-};
+static struct codec codecs[PACK_CODECS];
 
 static void
-codec_enable (enum pack_base64_codec codec, base64_enc_fn enc, base64_dec_fn dec,
-	pack_bulk_loop enc_loop, pack_bulk_loop dec_loop, base64_filter_fn filter, size_t min_size)
+codec_enable (enum pack_codec codec, base64_enc_fn enc, base64_dec_fn dec,
+	pack_bulk_loop enc_loop, pack_bulk_loop dec_loop, base64_filter_fn filter)
 {
 	codecs[codec].enc = enc;
 	codecs[codec].dec = dec;
 	codecs[codec].enc_loop = enc_loop;
 	codecs[codec].dec_loop = dec_loop;
 	codecs[codec].filter = filter;
-	atomic_store_explicit(&codec_min_sizes[codec], min_size, memory_order_relaxed);
 }
 
 /* For an 8-bit keep mask, the indexes of its set bits, packed from the low byte */
@@ -4404,13 +4393,13 @@ codec_choose_x86 (void)
 				if (max_level >= 7) {
 					__cpuid_count(7, 0, eax, ebx, ecx, edx);
 					if (ebx & bit_AVX2) {
-						codec_enable(PACK_BASE64_AVX2, base64_stream_encode_avx2,
-							base64_stream_decode_avx2, enc_loop_avx2, dec_loop_avx2, filter_avx2, CODEC_DEFAULT_MIN_SIZE_AVX2);
+						codec_enable(PACK_CODEC_AVX2, base64_stream_encode_avx2,
+							base64_stream_decode_avx2, enc_loop_avx2, dec_loop_avx2, filter_avx2);
 					}
 					if ((xcr_mask & _AVX_512_ENABLED_BY_OS) == _AVX_512_ENABLED_BY_OS) {
 						if ((ebx & bit_AVX512vl) && (ecx & bit_AVX512vbmi) && (ecx & bit_AVX512vbmi2)) {
-							codec_enable(PACK_BASE64_AVX512, base64_stream_encode_avx512,
-								base64_stream_decode_avx512, enc_loop_avx512, dec_loop_avx512, filter_avx512, CODEC_DEFAULT_MIN_SIZE_AVX512);
+							codec_enable(PACK_CODEC_AVX512, base64_stream_encode_avx512,
+								base64_stream_decode_avx512, enc_loop_avx512, dec_loop_avx512, filter_avx512);
 						}
 					}
 				}
@@ -4808,8 +4797,8 @@ base64_stream_decode_neon64 BASE64_DEC_PARAMS
 static void
 codec_choose_aarch64 (void)
 {
-	codec_enable(PACK_BASE64_NEON64, base64_stream_encode_neon64,
-		base64_stream_decode_neon64, enc_loop_neon64, dec_loop_neon64, filter_neon64, CODEC_DEFAULT_MIN_SIZE_NEON64);
+	codec_enable(PACK_CODEC_NEON64, base64_stream_encode_neon64,
+		base64_stream_decode_neon64, enc_loop_neon64, dec_loop_neon64, filter_neon64);
 }
 
 #endif /* aarch64 */
@@ -4817,85 +4806,63 @@ codec_choose_aarch64 (void)
 /* ======================================================================
  * Codec selection and public API
  *
- * Each codec has a minimum size, in bytes; SIZE_MAX means never.
- * The codec with the largest minimum size <= the measured size wins;
- * if none, plain C runs.
- *   Encoding - size is srclen (raw bytes).
- *   Decoding - size is the decoded output length (srclen * 3 / 4).
- *
- * Minimum sizes may change while other threads encode or decode, so they
- * are read with relaxed atomic loads. Every codec produces identical
- * output, so a mix of old and new values is harmless.
+ * One current codec, the best this CPU runs unless set otherwise, serves
+ * every call. Each call reads it once, with a relaxed atomic load: it may
+ * change while other threads encode or decode, and every codec produces
+ * identical output.
  * ====================================================================== */
 
-static const struct codec codec_plain = {
-	base64_stream_encode_plain, base64_stream_decode_plain, NULL, NULL, NULL
-};
-
-/* Ties resolve in this order */
-static const enum pack_base64_codec codec_order[PACK_BASE64_CODECS] = {
-	PACK_BASE64_AVX512, PACK_BASE64_AVX2, PACK_BASE64_NEON64
-};
+static _Atomic int codec_current = PACK_CODEC_SCALAR;
 
 static inline const struct codec *
-codec_for_size (size_t size)
+codec_get (void)
 {
-	const struct codec *best = &codec_plain;
-	size_t best_min_size = 0;
-
-	for (int i = 0; i < PACK_BASE64_CODECS; i++) {
-		enum pack_base64_codec codec = codec_order[i];
-		size_t min_size = atomic_load_explicit(&codec_min_sizes[codec], memory_order_relaxed);
-
-		if (min_size != SIZE_MAX && min_size <= size &&
-		    (best == &codec_plain || min_size > best_min_size)) {
-			best = &codecs[codec];
-			best_min_size = min_size;
-		}
-	}
-	return best;
+	return &codecs[atomic_load_explicit(&codec_current, memory_order_relaxed)];
 }
 
 pack_bulk_loop
-pack_simd_enc_loop (size_t size)
+pack_simd_enc_loop (void)
 {
-	return codec_for_size(size)->enc_loop;
+	return codec_get()->enc_loop;
 }
 
 pack_bulk_loop
-pack_simd_dec_loop (size_t size)
+pack_simd_dec_loop (void)
 {
-	return codec_for_size(size)->dec_loop;
+	return codec_get()->dec_loop;
 }
 
 int
-pack_base64_codec_runnable (enum pack_base64_codec codec)
+pack_codec_runnable (enum pack_codec codec)
 {
 	return codecs[codec].enc != NULL;
 }
 
-size_t
-pack_base64_codec_min_size (enum pack_base64_codec codec)
+enum pack_codec
+pack_codec_current (void)
 {
-	return atomic_load_explicit(&codec_min_sizes[codec], memory_order_relaxed);
+	return (enum pack_codec)atomic_load_explicit(&codec_current, memory_order_relaxed);
 }
 
 void
-pack_base64_set_codec_min_size (enum pack_base64_codec codec, size_t min_size)
+pack_codec_set (enum pack_codec codec)
 {
-	if (pack_base64_codec_runnable(codec)) {
-		atomic_store_explicit(&codec_min_sizes[codec], min_size, memory_order_relaxed);
-	}
+	atomic_store_explicit(&codec_current, (int)codec, memory_order_relaxed);
 }
 
 static void
 codecs_init (void)
 {
+	codec_enable(PACK_CODEC_SCALAR, base64_stream_encode_plain, base64_stream_decode_plain, NULL, NULL, NULL);
 #if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 	codec_choose_x86();
 #elif defined(__aarch64__) || defined(_M_ARM64)
 	codec_choose_aarch64();
 #endif
+	/* The best runnable codec comes last */
+	for (int i = 0; i < PACK_CODECS; i++) {
+		if (pack_codec_runnable(i)) pack_codec_set(i);
+	}
 }
 
 /* Stream encode finalization (from lib.c) */
@@ -4941,7 +4908,7 @@ pack_base64_encode (const char *src, size_t srclen, char *out, int flags)
 	state.carry = 0;
 	state.flags = flags;
 
-	codec_for_size(srclen)->enc(&state, src, srclen, out, &s);
+	codec_get()->enc(&state, src, srclen, out, &s);
 	base64_stream_encode_final(&state, out + s, &t);
 
 	return s + t;
@@ -4958,7 +4925,7 @@ pack_base64_decode (const char *src, size_t srclen, char *out, size_t *outlen, i
 	state.carry = 0;
 	state.flags = flags;
 
-	int ret = codec_for_size(srclen * 3 / 4)->dec(&state, src, srclen, out, outlen);
+	int ret = codec_get()->dec(&state, src, srclen, out, outlen);
 
 	if (!ret) {
 		return 0;
@@ -5002,7 +4969,7 @@ pack_base64_decode (const char *src, size_t srclen, char *out, size_t *outlen, i
  *
  * Used by the 'm' pack directive (non-strict, len != 0).
  * The encoder produces line-wrapped output, batching whole lines
- * through the SIMD codec picked by routing; the tail is scalar.
+ * through the current SIMD codec; the tail is scalar.
  * The decoder is lenient, skipping non-base64 characters: the SIMD
  * codec's filter squeezes the alphabet chars of each block into a
  * scratch buffer, which its decoder then decodes. A scalar loop takes
@@ -5071,11 +5038,11 @@ encode_whole (const struct codec *codec, const char *src, size_t srclen, char *o
 size_t
 pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_per_line)
 {
-	const struct codec *codec = codec_for_size(srclen);
+	const struct codec *codec = codec_get();
 
 	bytes_per_line = bytes_per_line / 3 * 3;
 	if (bytes_per_line == 0) bytes_per_line = 45;
-	if (codec == &codec_plain) return encode_rfc2045_plain(src, srclen, out, bytes_per_line);
+	if (!codec->enc_loop) return encode_rfc2045_plain(src, srclen, out, bytes_per_line);
 
 	size_t line = (size_t)bytes_per_line;
 	size_t chars = line / 3 * 4;
@@ -5168,7 +5135,7 @@ done:
 size_t
 pack_base64_decode_rfc2045(const char *src, size_t srclen, char *out)
 {
-	const struct codec *codec = codec_for_size(srclen * 3 / 4);
+	const struct codec *codec = codec_get();
 	const uint8_t *s = (const uint8_t *)src;
 	const uint8_t *end = s + srclen;
 	uint8_t *o = (uint8_t *)out;

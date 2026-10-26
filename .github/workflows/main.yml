@@ -58,8 +58,8 @@ jobs:
           MAKEFLAGS: 'CC=${{ matrix.cc }} warnflags=-Wall\ -Wextra\ -Wno-unused-parameter\ -Werror'
         run: bundle exec rake compile
 
-      - name: Show codec routing
-        run: bundle exec ruby -Ilib -rob64 -e 'p Ob64.codec_routing'
+      - name: Show codecs
+        run: bundle exec ruby -Ilib -rob64 -e 'p Ob64.codecs, Ob64.codec'
 
       - name: Test
         run: bundle exec rake spec

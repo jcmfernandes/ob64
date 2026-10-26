@@ -2,115 +2,65 @@
 
 require "rbconfig"
 
-RSpec.describe "Ob64.codec_routing" do
-  size_max = 2**(8 * [0].pack("J").bytesize) - 1
-
-  def cpu_defaults
-    return {neon64: 128} if RbConfig::CONFIG["host_cpu"].match?(/aarch64|arm64/)
+RSpec.describe "Ob64.codec" do
+  def cpu_codecs
+    return %i[scalar neon64] if RbConfig::CONFIG["host_cpu"].match?(/aarch64|arm64/)
 
     flags = File.foreach("/proc/cpuinfo").find { |line| line.start_with?("flags") }.to_s.split
-    defaults = {}
-    defaults[:avx2] = 128 if flags.include?("avx2")
-    defaults[:avx512] = 1280 if flags.include?("avx512vl") && flags.include?("avx512vbmi") && flags.include?("avx512_vbmi2")
-    defaults
-  end
-
-  def runnable
-    Ob64.codec_routing.keys
-  end
-
-  def unrunnable
-    %i[avx2 avx512 neon64] - runnable
+    codecs = [:scalar]
+    codecs << :avx2 if flags.include?("avx2")
+    codecs << :avx512 if flags.include?("avx512vl") && flags.include?("avx512vbmi") && flags.include?("avx512_vbmi2")
+    codecs
   end
 
   around do |example|
-    saved = Ob64.codec_routing
+    saved = Ob64.codec
     example.run
   ensure
-    Ob64.codec_routing = saved
+    Ob64.codec = saved
   end
 
-  it "lists the codecs this CPU runs with their defaults" do
-    expect(Ob64.codec_routing).to eq(cpu_defaults)
-    expect(Ob64.codec_routing.keys).to eq(cpu_defaults.keys)
+  it "lists the codecs this CPU runs, best last" do
+    expect(Ob64.codecs).to eq(cpu_codecs)
   end
 
-  it "merges into the current routing" do
-    skip "no SIMD codec" if runnable.empty?
-    codec = runnable.first
-
-    Ob64.codec_routing = {codec => 7}
-    expect(Ob64.codec_routing).to eq(cpu_defaults.merge(codec => 7))
-
-    Ob64.codec_routing = {}
-    expect(Ob64.codec_routing).to eq(cpu_defaults.merge(codec => 7))
+  it "defaults to the best codec" do
+    expect(Ob64.best_codec).to eq(cpu_codecs.last)
+    expect(Ob64.codec).to eq(Ob64.best_codec)
   end
 
-  it "accepts nil, 0 and the largest size" do
-    skip "no SIMD codec" if runnable.empty?
-    codec = runnable.first
-
-    Ob64.codec_routing = {codec => nil}
-    expect(Ob64.codec_routing[codec]).to be_nil
-    Ob64.codec_routing = {codec => 0}
-    expect(Ob64.codec_routing[codec]).to eq(0)
-    Ob64.codec_routing = {codec => size_max - 1}
-    expect(Ob64.codec_routing[codec]).to eq(size_max - 1)
+  it "keeps the best codec when another is forced" do
+    Ob64.codec = :scalar
+    expect(Ob64.best_codec).to eq(cpu_codecs.last)
   end
 
-  it "allows several codecs set to nil" do
-    Ob64.codec_routing = runnable.to_h { |codec| [codec, nil] }
-    expect(Ob64.codec_routing).to eq(runnable.to_h { |codec| [codec, nil] })
-  end
-
-  it "raises TypeError for a non-Hash" do
-    [nil, [[:avx2, 1]], "avx2", 1].each do |arg|
-      expect { Ob64.codec_routing = arg }.to raise_error(TypeError)
+  it "sets each runnable codec" do
+    Ob64.codecs.each do |codec|
+      expect(Ob64.public_send(:codec=, codec)).to eq(codec)
+      expect(Ob64.codec).to eq(codec)
     end
-    expect(Ob64.codec_routing).to eq(cpu_defaults)
   end
 
-  it "raises ArgumentError for an unknown key, changing nothing" do
-    [{plain: 1}, {"avx2" => 1}, {sse: 1}, {nil => 1}].each do |arg|
-      expect { Ob64.codec_routing = arg }.to raise_error(ArgumentError, /unknown codec/)
+  it "raises ArgumentError for an unknown codec, keeping the current one" do
+    current = Ob64.codec = Ob64.codecs.last
+    [:sse, "scalar", nil, 1].each do |arg|
+      expect { Ob64.codec = arg }.to raise_error(ArgumentError, "unknown codec: #{arg.inspect}")
+      expect(Ob64.codec).to eq(current)
     end
-    expect { Ob64.codec_routing = runnable.to_h { |codec| [codec, nil] }.merge(plain: 1) }.to raise_error(ArgumentError)
-    expect(Ob64.codec_routing).to eq(cpu_defaults)
   end
 
-  it "raises ArgumentError for an invalid value, changing nothing" do
-    %i[avx2 avx512 neon64].each do |codec|
-      [-1, -(2**64), size_max, size_max + 1, 1.0, "1", :x, true, false].each do |value|
-        expect { Ob64.codec_routing = {codec => value} }.to raise_error(ArgumentError, /invalid size/)
-      end
-    end
-    expect { Ob64.codec_routing = runnable.to_h { |codec| [codec, 9] }.merge(avx2: -1) }.to raise_error(ArgumentError)
-    expect(Ob64.codec_routing).to eq(cpu_defaults)
-  end
-
-  it "raises ArgumentError for two runnable codecs with the same value after merging, changing nothing" do
-    skip "fewer than two SIMD codecs" if runnable.size < 2
-    a, b = runnable
-
-    expect { Ob64.codec_routing = {a => Ob64.codec_routing[b]} }.to raise_error(ArgumentError, "#{a} and #{b} have the same size: #{Ob64.codec_routing[b]}")
-    expect { Ob64.codec_routing = {a => 5, b => 5} }.to raise_error(ArgumentError)
-    expect(Ob64.codec_routing).to eq(cpu_defaults)
-  end
-
-  it "ignores known keys this CPU cannot run" do
+  it "raises ArgumentError for a codec this CPU cannot run, keeping the current one" do
+    unrunnable = %i[avx2 avx512 neon64] - Ob64.codecs
     skip "every codec runs here" if unrunnable.empty?
 
+    current = Ob64.codec = Ob64.codecs.last
     unrunnable.each do |codec|
-      Ob64.codec_routing = {codec => 5}
-      expect(Ob64.codec_routing).to eq(cpu_defaults)
-      runnable.each do |other|
-        Ob64.codec_routing = {codec => Ob64.codec_routing[other]}
-        expect(Ob64.codec_routing).to eq(cpu_defaults)
-      end
+      expect { Ob64.codec = codec }.to raise_error(ArgumentError, "#{codec} is not supported by this CPU")
+      expect(Ob64.codec).to eq(current)
     end
   end
 
-  describe "forced routing" do
+  describe "forced codec" do
     def outcome
       [:ok, yield]
     rescue => e
@@ -150,19 +100,15 @@ RSpec.describe "Ob64.codec_routing" do
       mismatches << "#{label}: expected #{expected.inspect[0, 200]}, got #{actual.inspect[0, 200]}" if expected != actual
     end
 
-    codecs = Ob64.codec_routing.keys
-    never = codecs.to_h { |codec| [codec, nil] }
-    routings = {"plain" => never}.merge(codecs.to_h { |codec| [codec.to_s, never.merge(codec => 0)] })
-
-    routings.each do |name, routing|
-      context "with #{name} only" do
+    Ob64.codecs.each do |codec|
+      context "with #{codec}" do
         let(:rng) { Random.new(RSpec.configuration.seed) }
         let(:sizes) { (0..300).to_a + (1200..1400).to_a + [4093, 65_537, rng.rand(100_000..300_000)] }
 
-        before { Ob64.codec_routing = routing }
+        before { Ob64.codec = codec }
 
-        it "routes as forced" do
-          expect(Ob64.codec_routing).to eq(routing)
+        it "is current" do
+          expect(Ob64.codec).to eq(codec)
         end
 
         it "encodes and decodes like native m0" do

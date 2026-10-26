@@ -7,10 +7,10 @@ RSpec.describe "line-wrapped m and u" do
   junk = ["\n", "\r\n", " ", "\t", "\0", "\x80".b, "\xFF".b, "-", "_", "!", "~", "a"].freeze
 
   around do |example|
-    saved = Ob64.codec_routing
+    saved = Ob64.codec
     example.run
   ensure
-    Ob64.codec_routing = saved
+    Ob64.codec = saved
   end
 
   def check(mismatches, label, expected, actual)
@@ -85,16 +85,12 @@ RSpec.describe "line-wrapped m and u" do
     s
   end
 
-  codecs = Ob64.codec_routing.keys
-  never = codecs.to_h { |codec| [codec, nil] }
-  routings = {"plain" => never}.merge(codecs.to_h { |codec| [codec.to_s, never.merge(codec => 0)] })
-
-  routings.each do |name, routing|
-    context "with #{name} only" do
+  Ob64.codecs.each do |codec|
+    context "with #{codec}" do
       let(:rng) { Random.new(RSpec.configuration.seed) }
       let(:sizes) { [*0..200, *1000..1100, 4093, 65_537, rng.rand(100_000..300_000)] }
 
-      before { Ob64.codec_routing = routing }
+      before { Ob64.codec = codec }
 
       it "packs m like native" do
         mismatches = []

@@ -1524,7 +1524,7 @@ pack_uuencode_encode(const char *src, size_t srclen, char *out)
 size_t
 pack_uuencode_lines(const char *src, size_t srclen, char *out, size_t line_len)
 {
-    pack_bulk_loop loop = pack_simd_enc_loop(srclen);
+    pack_bulk_loop loop = pack_simd_enc_loop();
     const uint8_t *s = (const uint8_t *)src;
     uint8_t *o = (uint8_t *)out;
 
@@ -1698,7 +1698,7 @@ pack_uudecode_lines(const char *src, size_t srclen, char *out)
     struct uu_walk w = {
         (const uint8_t *)src, (const uint8_t *)src + srclen, (uint8_t *)out, 0, pack_uudecode_cap(srclen)
     };
-    pack_bulk_loop loop = out ? pack_simd_dec_loop(srclen * 3 / 4) : NULL;
+    pack_bulk_loop loop = out ? pack_simd_dec_loop() : NULL;
 
     if (loop) {
         uint8_t buf[PACK_UU_SCRATCH];

@@ -72,28 +72,24 @@ Ob64::UU.decode(string)
 # "This is data!"
 ```
 
-### Codec routing
+### Codecs
 
-SIMD codecs are used from a minimum input size, in bytes. Below it, plain C runs.
+The best codec this CPU runs is picked at load and used for every call. `Ob64.codec=` forces one for the whole process (e.g. `:scalar`, plain C).
 
 ```ruby
-Ob64.codec_routing
-# x86-64 with AVX512 => {avx2: 128, avx512: 1280}
-# x86-64 with AVX2   => {avx2: 128}
-# AArch64            => {neon64: 128}
-# other              => {}
+Ob64.codecs
+# x86-64 with AVX512 => [:scalar, :avx2, :avx512]
+# x86-64 with AVX2   => [:scalar, :avx2]
+# AArch64            => [:scalar, :neon64]
+# other              => [:scalar]
 
-Ob64.codec_routing = {avx2: 256, avx512: nil}
+Ob64.best_codec     # => :avx512
+Ob64.codec          # => :avx512
+Ob64.codec = :scalar
+Ob64.codec = Ob64.best_codec
 ```
 
 AVX512 needs VL, VBMI and VBMI2.
-
-* Keys: `:avx2`, `:avx512`, `:neon64`. Value: smallest size at which the codec is used; `nil`: never.
-* Routing applies to `Ob64::Base64`, `Ob64::UU`, `m0`, `m` and `u`.
-* Size is the input length when encoding, `input_length * 3 / 4` when decoding.
-* The codec with the largest value <= size wins.
-* The getter lists only codecs this CPU runs. The setter merges, and ignores known keys this CPU can't run.
-* Raises `TypeError` for a non-Hash, `ArgumentError` for unknown keys, invalid values or equal values on two runnable codecs.
 
 ### `pack` / `unpack`
 
