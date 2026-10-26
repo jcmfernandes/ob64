@@ -2,7 +2,7 @@
 
 [![Gem Version](https://badge.fury.io/rb/ob64.svg)](http://rubygems.org/gems/ob64)
 [![CI](https://github.com/jcmfernandes/ob64/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/jcmfernandes/ob64/actions/workflows/main.yml)
-[![Yard Docs](https://img.shields.io/badge/yard-docs-blue.svg)](http://www.rubydoc.info/gems/ob64/0.5.0)
+[![Yard Docs](https://img.shields.io/badge/yard-docs-blue.svg)](http://www.rubydoc.info/gems/ob64/0.6.0)
 
 A *fast* Base64 and uuencode encoder and decoder as a Ruby gem.
 

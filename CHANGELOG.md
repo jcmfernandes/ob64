@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.6.0] - 2026-10-26
 
 - **Breaking:** `ob64/core_ext` patches `Array#pack`, `String#unpack` and `String#unpack1` instead of `Base64`.
 - **Breaking:** Require Ruby >= 3.3.
