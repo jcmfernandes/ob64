@@ -60,6 +60,20 @@ uuencode(VALUE from, long line_len)
   return ascii_result(res, n);
 }
 
+/* line_len: bytes per line, a multiple of 3; crlf: lines end in "\r\n" */
+static VALUE
+base64_encode_rfc2045(VALUE from, long line_len, int crlf)
+{
+  long plen = RSTRING_LEN(from);
+  /* A line break per line */
+  long lines = (plen + line_len - 1) / line_len;
+  VALUE res = rb_str_buf_new((plen + 2) / 3 * 4 + lines * (crlf ? 2 : 1));
+  size_t n = pack_base64_encode_rfc2045(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), (int)line_len, crlf);
+  RB_GC_GUARD(from);
+
+  return ascii_result(res, n);
+}
+
 static VALUE
 Ob64_pack(int argc, VALUE *argv, VALUE ary)
 {
@@ -75,31 +89,22 @@ Ob64_pack(int argc, VALUE *argv, VALUE ary)
     return rb_call_super_kw(argc, argv, RB_PASS_CALLED_KEYWORDS);
   }
 
-  VALUE res;
-  size_t n;
-
   if (type == 'm' && count == 0) {
-    res = rb_str_buf_new((plen + 2) / 3 * 4);
-    n = pack_base64_encode(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), 0);
+    VALUE res = rb_str_buf_new((plen + 2) / 3 * 4);
+    size_t n = pack_base64_encode(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), 0);
+    RB_GC_GUARD(from);
+
+    return ascii_result(res, n);
   }
-  else {
-    long len = count;
 
-    /* '*' gets 45, as natively */
-    if (len <= 2) len = 45;
-    else if (len > 63 && type == 'u') len = 63;
-    else len = len / 3 * 3;
+  long len = count;
 
-    if (type == 'u') return uuencode(from, len);
+  /* '*' gets 45, as natively */
+  if (len <= 2) len = 45;
+  else if (len > 63 && type == 'u') len = 63;
+  else len = len / 3 * 3;
 
-    /* A newline per line */
-    long lines = (plen + len - 1) / len;
-    res = rb_str_buf_new((plen + 2) / 3 * 4 + lines);
-    n = pack_base64_encode_rfc2045(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), (int)len);
-  }
-  RB_GC_GUARD(from);
-
-  return ascii_result(res, n);
+  return type == 'u' ? uuencode(from, len) : base64_encode_rfc2045(from, len, 0);
 }
 
 static VALUE
@@ -174,6 +179,58 @@ Ob64_unpack1(int argc, VALUE *argv, VALUE str)
   return res;
 }
 
+/* Bytes per line for a line_length in chars; validates both arguments */
+static long
+rfc2045_line_bytes(VALUE bin, VALUE line_length)
+{
+  long chars = NUM2LONG(line_length);
+
+  StringValue(bin);
+  if (chars < 4 || chars % 4 || chars / 4 * 3 > INT_MAX) {
+    rb_raise(rb_eArgError, "line length must be a positive multiple of 4: %ld", chars);
+  }
+  /* Bound the output size */
+  if (RSTRING_LEN(bin) > LONG_MAX / 4) rb_raise(rb_eArgError, "argument too big");
+
+  return chars / 4 * 3;
+}
+
+static VALUE
+Ob64_encode_rfc_2045(VALUE self, VALUE bin, VALUE line_length, VALUE crlf)
+{
+  long line_bytes = rfc2045_line_bytes(bin, line_length);
+
+  return base64_encode_rfc2045(bin, line_bytes, RTEST(crlf));
+}
+
+static VALUE
+Ob64_decode_rfc_2045(VALUE self, VALUE string)
+{
+  StringValue(string);
+
+  return base64_decode(string, 1);
+}
+
+static VALUE
+Ob64_encoded_length_of_rfc_2045(VALUE self, VALUE bin, VALUE line_length, VALUE crlf)
+{
+  long line_bytes = rfc2045_line_bytes(bin, line_length);
+  long plen = RSTRING_LEN(bin);
+
+  /* 4 chars per 3 bytes, a line break per line */
+  return LONG2NUM((plen + 2) / 3 * 4 + (plen + line_bytes - 1) / line_bytes * (RTEST(crlf) ? 2 : 1));
+}
+
+static VALUE
+Ob64_decoded_length_of_rfc_2045(VALUE self, VALUE string)
+{
+  StringValue(string);
+  size_t n = pack_base64_decoded_length_rfc2045(RSTRING_PTR(string), (size_t)RSTRING_LEN(string));
+  RB_GC_GUARD(string);
+
+  return SIZET2NUM(n);
+}
+
 static VALUE
 Ob64_uuencode(VALUE self, VALUE bin)
 {
@@ -221,6 +278,10 @@ Init_ob64_pack(VALUE mExt)
   rb_define_method(mUnpack, "unpack", Ob64_unpack, -1);
   rb_define_method(mUnpack, "unpack1", Ob64_unpack1, -1);
 
+  rb_define_private_method(mExt, "__encode_rfc_2045", Ob64_encode_rfc_2045, 3);
+  rb_define_private_method(mExt, "__decode_rfc_2045", Ob64_decode_rfc_2045, 1);
+  rb_define_private_method(mExt, "__encoded_length_of_rfc_2045", Ob64_encoded_length_of_rfc_2045, 3);
+  rb_define_private_method(mExt, "__decoded_length_of_rfc_2045", Ob64_decoded_length_of_rfc_2045, 1);
   rb_define_private_method(mExt, "__uuencode", Ob64_uuencode, 1);
   rb_define_private_method(mExt, "__uudecode", Ob64_uudecode, 1);
   rb_define_private_method(mExt, "__uuencoded_length_of", Ob64_uuencoded_length_of, 1);

@@ -1,3 +1,8 @@
+## [0.7.0] - 2026-10-26
+
+- **Breaking:** Split `Ob64::Base64` into one module per RFC. `Ob64::Base64::RFC4648` has `encode`, `decode`, `encode_urlsafe`, `decode_urlsafe`, `encoded_length_of` and `decoded_length_of` (were `Ob64::Base64.encode`, `decode`, `urlsafe_encode`, `urlsafe_decode`, `encoded_length_of` and `decoded_length_of`).
+- Add `Ob64::Base64::RFC2045` with `encode` (optionally with CRLF line breaks), `decode`, `encoded_length_of` and `decoded_length_of`, like `pack("m")` and `unpack1("m")`.
+
 ## [0.6.0] - 2026-10-26
 
 - **Breaking:** `ob64/core_ext` patches `Array#pack`, `String#unpack` and `String#unpack1` instead of `Base64`.

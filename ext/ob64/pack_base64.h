@@ -27,7 +27,10 @@ size_t pack_base64_encode(const char *src, size_t srclen, char *out, int flags);
 int pack_base64_decode(const char *src, size_t srclen, char *out, size_t *outlen, int flags);
 
 /* RFC 2045 codec (m with line wrapping, lenient decode) */
-size_t pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_per_line);
+/* Lines end in "\r\n" if crlf, "\n" otherwise */
+size_t pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_per_line, int crlf);
 size_t pack_base64_decode_rfc2045(const char *src, size_t srclen, char *out);
+/* Length pack_base64_decode_rfc2045 would return; reads all of src */
+size_t pack_base64_decoded_length_rfc2045(const char *src, size_t srclen);
 
 #endif /* PACK_BASE64_H */

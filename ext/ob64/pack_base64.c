@@ -4993,7 +4993,7 @@ pack_base64_decode (const char *src, size_t srclen, char *out, size_t *outlen, i
  * ====================================================================== */
 
 static size_t
-encode_rfc2045_plain(const char *src, size_t srclen, char *out, int bytes_per_line)
+encode_rfc2045_plain(const char *src, size_t srclen, char *out, int bytes_per_line, int crlf)
 {
     const uint8_t *s = (const uint8_t *)src;
     char *o = out;
@@ -5012,6 +5012,7 @@ encode_rfc2045_plain(const char *src, size_t srclen, char *out, int bytes_per_li
         srclen -= 3;
         line_bytes += 3;
         if (line_bytes >= bytes_per_line) {
+            if (crlf) *o++ = '\r';
             *o++ = '\n';
             line_bytes = 0;
         }
@@ -5022,6 +5023,7 @@ encode_rfc2045_plain(const char *src, size_t srclen, char *out, int bytes_per_li
         *o++ = base64_table_enc_6bit[((s[0] & 0x03) << 4) | (s[1] >> 4)];
         *o++ = base64_table_enc_6bit[(s[1] & 0x0F) << 2];
         *o++ = '=';
+        if (crlf) *o++ = '\r';
         *o++ = '\n';
     }
     else if (srclen == 1) {
@@ -5029,9 +5031,11 @@ encode_rfc2045_plain(const char *src, size_t srclen, char *out, int bytes_per_li
         *o++ = base64_table_enc_6bit[(s[0] & 0x03) << 4];
         *o++ = '=';
         *o++ = '=';
+        if (crlf) *o++ = '\r';
         *o++ = '\n';
     }
     else if (line_bytes > 0) {
+        if (crlf) *o++ = '\r';
         *o++ = '\n';
     }
 
@@ -5052,13 +5056,13 @@ encode_whole (const struct codec *codec, const char *src, size_t srclen, char *o
 }
 
 size_t
-pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_per_line)
+pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_per_line, int crlf)
 {
 	const struct codec *codec = codec_get();
 
 	bytes_per_line = bytes_per_line / 3 * 3;
 	if (bytes_per_line == 0) bytes_per_line = 45;
-	if (!codec->enc_loop) return encode_rfc2045_plain(src, srclen, out, bytes_per_line);
+	if (!codec->enc_loop) return encode_rfc2045_plain(src, srclen, out, bytes_per_line, crlf);
 
 	size_t line = (size_t)bytes_per_line;
 	size_t chars = line / 3 * 4;
@@ -5072,6 +5076,7 @@ pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_
 		if (lines_per_batch == 0) {
 			/* Lines longer than the buffer: encode in place */
 			o += encode_whole(codec, src, line, o);
+			if (crlf) *o++ = '\r';
 			*o++ = '\n';
 			lines = 1;
 		}
@@ -5081,6 +5086,7 @@ pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_
 			for (size_t i = 0; i < lines; i++) {
 				memcpy(o, buf + i * chars, chars);
 				o += chars;
+				if (crlf) *o++ = '\r';
 				*o++ = '\n';
 			}
 		}
@@ -5088,7 +5094,7 @@ pack_base64_encode_rfc2045(const char *src, size_t srclen, char *out, int bytes_
 		srclen -= lines * line;
 	}
 
-	return (size_t)(o - out) + encode_rfc2045_plain(src, srclen, o, bytes_per_line);
+	return (size_t)(o - out) + encode_rfc2045_plain(src, srclen, o, bytes_per_line, crlf);
 }
 
 /*
@@ -5179,4 +5185,25 @@ pack_base64_decode_rfc2045(const char *src, size_t srclen, char *out)
 	/* nheld == 0 folds the resume entry away */
 	if (n == 0) return (size_t)(o - (uint8_t *)out) + decode_rfc2045_from(s, end, o, NULL, 0);
 	return (size_t)(o - (uint8_t *)out) + decode_rfc2045_from(s, end, o, buf, n);
+}
+
+size_t
+pack_base64_decoded_length_rfc2045(const char *src, size_t srclen)
+{
+	const uint8_t *s = (const uint8_t *)src;
+	const uint8_t *end = s + srclen;
+	size_t n = 0;
+
+	/* Counts what pack_base64_decode_rfc2045 decodes: alphabet chars up to a '=' in group position 3-4 */
+	for (; s < end; s++) {
+		const uint8_t v = base64_table_dec_8bit[*s];
+
+		if (v == 255) continue;
+		if (v == 254) {
+			if (n % 4 >= 2) break;
+			continue;
+		}
+		n++;
+	}
+	return n / 4 * 3 + (n % 4 == 3 ? 2 : n % 4 == 2 ? 1 : 0);
 }

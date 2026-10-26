@@ -41,28 +41,30 @@ each_size do |bin|
 
   compare(
     "Ruby pack(\"m0\")" => -> { NATIVE_PACK.bind_call([bin], "m0") },
-    "ob64 Base64.encode" => -> { Ob64::Base64.encode(bin) },
+    "ob64 Base64::RFC4648.encode" => -> { Ob64::Base64::RFC4648.encode(bin) },
     "ob64 pack(\"m0\")" => -> { [bin].pack("m0") }
   )
   compare(
     "Ruby unpack1(\"m0\")" => -> { NATIVE_UNPACK1.bind_call(m0, "m0") },
-    "ob64 Base64.decode" => -> { Ob64::Base64.decode(m0) },
+    "ob64 Base64::RFC4648.decode" => -> { Ob64::Base64::RFC4648.decode(m0) },
     "ob64 unpack1(\"m0\")" => -> { m0.unpack1("m0") }
   )
   compare(
     "Ruby pack(\"m0\").tr" => -> { NATIVE_PACK.bind_call([bin], "m0").tr("+/", "-_") },
-    "ob64 Base64.urlsafe_encode" => -> { Ob64::Base64.urlsafe_encode(bin) }
+    "ob64 Base64::RFC4648.encode_urlsafe" => -> { Ob64::Base64::RFC4648.encode_urlsafe(bin) }
   )
   compare(
     "Ruby tr.unpack1(\"m0\")" => -> { NATIVE_UNPACK1.bind_call(urlsafe.tr("-_", "+/"), "m0") },
-    "ob64 Base64.urlsafe_decode" => -> { Ob64::Base64.urlsafe_decode(urlsafe) }
+    "ob64 Base64::RFC4648.decode_urlsafe" => -> { Ob64::Base64::RFC4648.decode_urlsafe(urlsafe) }
   )
   compare(
     "Ruby pack(\"m\")" => -> { NATIVE_PACK.bind_call([bin], "m") },
+    "ob64 Base64::RFC2045.encode" => -> { Ob64::Base64::RFC2045.encode(bin) },
     "ob64 pack(\"m\")" => -> { [bin].pack("m") }
   )
   compare(
     "Ruby unpack1(\"m\")" => -> { NATIVE_UNPACK1.bind_call(m, "m") },
+    "ob64 Base64::RFC2045.decode" => -> { Ob64::Base64::RFC2045.decode(m) },
     "ob64 unpack1(\"m\")" => -> { m.unpack1("m") }
   )
 end if $run_base64_benchmark

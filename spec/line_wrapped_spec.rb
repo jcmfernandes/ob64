@@ -102,6 +102,19 @@ RSpec.describe "line-wrapped m and u" do
             actual = [bin].pack(fmt)
             check(mismatches, "pack(#{fmt}, #{size})", [expected, expected.encoding], [actual, actual.encoding])
           end
+          [nil, 4, 60, 76, 400, 6668].each do |chars|
+            expected = NATIVE_PACK.bind_call([bin], chars ? "m#{chars / 4 * 3}" : "m")
+            actual = chars ? Ob64::Base64::RFC2045.encode(bin, chars) : Ob64::Base64::RFC2045.encode(bin)
+            check(mismatches, "Base64::RFC2045.encode(#{size}, #{chars})", [expected, expected.encoding], [actual, actual.encoding])
+            length = chars ? Ob64::Base64::RFC2045.encoded_length_of(bin, chars) : Ob64::Base64::RFC2045.encoded_length_of(bin)
+            check(mismatches, "Base64::RFC2045.encoded_length_of(#{size}, #{chars})", expected.bytesize, length)
+            crlf = expected.gsub("\n", "\r\n")
+            line_length = chars || 60
+            actual = Ob64::Base64::RFC2045.encode(bin, line_length, crlf: true)
+            check(mismatches, "Base64::RFC2045.encode(#{size}, #{line_length}, crlf: true)", [crlf, crlf.encoding], [actual, actual.encoding])
+            check(mismatches, "Base64::RFC2045.encoded_length_of(#{size}, #{line_length}, crlf: true)", crlf.bytesize,
+              Ob64::Base64::RFC2045.encoded_length_of(bin, line_length, crlf: true))
+          end
         end
         expect_none(mismatches)
       end
@@ -117,6 +130,10 @@ RSpec.describe "line-wrapped m and u" do
               actual = string.unpack1(f)
               check(mismatches, "unpack1(#{string.inspect[0, 100]}, #{f})", [expected, expected.encoding], [actual, actual.encoding])
             end
+            check(mismatches, "Base64::RFC2045.decode(#{string.inspect[0, 100]})", NATIVE_UNPACK1.bind_call(string, "m"),
+              Ob64::Base64::RFC2045.decode(string))
+            check(mismatches, "Base64::RFC2045.decoded_length_of(#{string.inspect[0, 100]})",
+              NATIVE_UNPACK1.bind_call(string, "m").bytesize, Ob64::Base64::RFC2045.decoded_length_of(string))
           end
         end
         expect_none(mismatches)

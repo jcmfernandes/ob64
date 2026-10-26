@@ -40,25 +40,33 @@ require "ob64"
 
 ### Base64
 
+One module per RFC, each with `encode`, `decode`, `encoded_length_of` and `decoded_length_of`.
+
+RFC 4648, no line breaks, same output as `pack("m0")` / `unpack1("m0")`:
+
 ```ruby
 bin1 = "This is data!"
-string = Ob64::Base64.encode(bin1)
+string = Ob64::Base64::RFC4648.encode(bin1)
 # string = "VGhpcyBpcyBkYXRhIQ=="
 
-bin2 = Ob64::Base64.decode(string)
+bin2 = Ob64::Base64::RFC4648.decode(string)
 puts "Same? #{bin1 == bin2}"
 # "Same? true"
+
+Ob64::Base64::RFC4648.decode("VGhpcyBpcyBkYXRhIQ", loose: true)  # padding optional
+Ob64::Base64::RFC4648.encode_urlsafe(bin1, padding: false)        # '-' and '_' instead of '+' and '/'
+Ob64::Base64::RFC4648.decode_urlsafe(string)
 ```
 
-Decode input with or without padding:
+Bad padding, non-zero trailing bits and non-alphabet characters raise `ArgumentError`.
+
+RFC 2045 (MIME), line-wrapped, same output as `pack("m")` / `unpack1("m")`:
 
 ```ruby
-Ob64::Base64.decode("VGhpcyBpcyBkYXRhIQ", loose: true)
+Ob64::Base64::RFC2045.encode(bin)              # 60-char lines, each ending in "\n"
+Ob64::Base64::RFC2045.encode(bin, 76, crlf: true)
+Ob64::Base64::RFC2045.decode(string)           # skips line breaks and other non-alphabet characters
 ```
-
-Bad padding, non-zero trailing bits and non-alphabet characters still raise `ArgumentError`.
-
-URL-safe alphabet: `Ob64::Base64.urlsafe_encode(bin, padding: false)`, `Ob64::Base64.urlsafe_decode(string)`.
 
 ### uuencode
 
@@ -118,8 +126,6 @@ Bug reports and pull requests are welcome on GitHub at https://github.com/jcmfer
 ## TODO
 
 * Streaming interface
-* RFC 2045 (MIME) encoding/decoding
-* Windows support
 
 ## License
 
