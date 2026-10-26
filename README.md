@@ -1,7 +1,7 @@
 # Ob64 gem
 
 [![Gem Version](https://badge.fury.io/rb/ob64.svg)](http://rubygems.org/gems/ob64)
-[![Build Status](https://github.com/jcmfernandes/ob64/workflows/Test/badge.svg?branch=master&event=push)](https://github.com/jcmfernandes/ob64/actions?query=workflow:Test)
+[![CI](https://github.com/jcmfernandes/ob64/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/jcmfernandes/ob64/actions/workflows/main.yml)
 [![Yard Docs](https://img.shields.io/badge/yard-docs-blue.svg)](http://www.rubydoc.info/gems/ob64/0.5.0)
 
 A *fast* Base64 encoder and decoder as a Ruby gem.

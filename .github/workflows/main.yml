@@ -1,28 +1,94 @@
-name: Test
+name: CI
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - run: bundle exec standardrb --no-fix
+
   test:
     strategy:
       fail-fast: false
       matrix:
-        ruby: ['3.3', '3.4', '4.0']
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        ruby: ["3.3", "3.4", "4.0"]
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        cc: [gcc, clang]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
-      - name: repository checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: load ruby
-        uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
-      - name: compile
+      - name: Install Clang
+        if: matrix.cc == 'clang'
+        run: command -v clang || { sudo apt-get update && sudo apt-get install -y clang; }
+
+      - name: Compile
+        env:
+          # Same warnings for both compilers; Ruby's defaults are GCC-only.
+          MAKEFLAGS: 'CC=${{ matrix.cc }} warnflags=-Wall\ -Wextra\ -Wno-unused-parameter\ -Werror'
         run: bundle exec rake compile
 
-      - name: test
+      - name: Show codec routing
+        run: bundle exec ruby -Ilib -rob64 -e 'p Ob64.codec_routing'
+
+      - name: Test
         run: bundle exec rake spec
-        timeout-minutes: 10
+
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "3.4"
+
+      - name: Build gem
+        run: gem build ob64.gemspec
+
+      - name: Install gem
+        run: gem install --local ./ob64-*.gem
+
+      - name: Smoke test
+        working-directory: ${{ runner.temp }}
+        run: |
+          ruby -e '
+            require "ob64"
+            require "ob64/core_ext"
+            s = Random.bytes(4096)
+            abort "Ob64 round trip failed" unless Ob64.decode(Ob64.encode(s)) == s
+            abort "pack round trip failed" unless [s].pack("m0").unpack1("m0") == s
+          '

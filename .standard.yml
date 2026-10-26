@@ -6,4 +6,4 @@ ignore:
   - 'benchmark.rb'
   - 'ext/**/*'
   - 'spec/**/*':
-    - Layout/AlignHash
+    - Layout/HashAlignment
