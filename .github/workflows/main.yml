@@ -36,8 +36,15 @@ jobs:
         ruby: ["3.3", "3.4", "4.0"]
         os: [ubuntu-24.04, ubuntu-24.04-arm]
         cc: [gcc, clang]
+        include:
+          # Ruby built with AddressSanitizer, x86-64 only: memory errors in the
+          # C code fail the specs. ubsan adds UndefinedBehaviorSanitizer.
+          - ruby: asan-release
+            os: ubuntu-24.04
+            cc: clang
+            ubsan: true
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,14 +62,23 @@ jobs:
       - name: Compile
         env:
           # Same warnings for both compilers; Ruby's defaults are GCC-only.
-          MAKEFLAGS: 'CC=${{ matrix.cc }} warnflags=-Wall\ -Wextra\ -Wno-unused-parameter\ -Werror'
+          MAKEFLAGS: >-
+            CC=${{ matrix.cc }}${{ matrix.ubsan && '\ -fsanitize=undefined\ -fno-sanitize-recover=all' || '' }}
+            warnflags=-Wall\ -Wextra\ -Wno-unused-parameter\ -Werror
         run: bundle exec rake compile
 
+      - name: Install Intel SDE if the CPU lacks AVX512
+        if: runner.arch == 'X64'
+        run: .github/install-sde
+
       - name: Show codecs
-        run: bundle exec ruby -Ilib -rob64 -e 'p Ob64.codecs, Ob64.codec'
+        run: $SDE bundle exec ruby -Ilib -rob64 -e 'p Ob64.codecs, Ob64.codec'
 
       - name: Test
-        run: bundle exec rake spec
+        env:
+          # Fails the codec spec if one is missing
+          OB64_CODECS: ${{ runner.arch == 'X64' && 'scalar,avx2,avx512' || 'scalar,neon64' }}
+        run: $SDE bundle exec rake spec
 
   package:
     runs-on: ubuntu-24.04

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Installs Intel SDE if this CPU can't run the avx512 codec, and exports SDE,
+# a command prefix that emulates a CPU that can.
+set -euo pipefail
+
+missing=
+for flag in avx512vl avx512vbmi avx512_vbmi2; do
+  grep -qw "$flag" /proc/cpuinfo || missing=1
+done
+[ -n "$missing" ] || exit 0
+
+url=https://downloadmirror.intel.com/924984/sde-external-10.13.1-2026-07-28-lin.tar.xz
+sha256=94e97d623fec54385686e1e7ba65ebc9941748c05ee451423948334892bf2b50
+dir="$RUNNER_TEMP/sde"
+
+curl -fsSL -o "$dir.tar.xz" "$url"
+echo "$sha256  $dir.tar.xz" | sha256sum -c --quiet
+mkdir -p "$dir"
+tar xJf "$dir.tar.xz" -C "$dir" --strip-components=1
+# Ice Lake: AVX512 with VBMI and VBMI2
+echo "SDE=$dir/sde64 -icl --" >>"$GITHUB_ENV"

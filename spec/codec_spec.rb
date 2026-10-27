@@ -3,7 +3,10 @@
 require "rbconfig"
 
 RSpec.describe "Ob64.codec" do
+  # OB64_CODECS: the codecs CI expects, e.g. "scalar,avx2,avx512"; also right
+  # under an emulator, where /proc/cpuinfo shows the host CPU.
   def cpu_codecs
+    return ENV["OB64_CODECS"].split(",").map(&:to_sym) if ENV["OB64_CODECS"]
     return %i[scalar neon64] if RbConfig::CONFIG["host_cpu"].match?(/aarch64|arm64/)
 
     flags = File.foreach("/proc/cpuinfo").find { |line| line.start_with?("flags") }.to_s.split
