@@ -1,3 +1,7 @@
+## [Unreleased]
+
+- Fix undefined behavior in AVX512 detection.
+
 ## [0.7.0] - 2026-10-26
 
 - **Breaking:** Split `Ob64::Base64` into one module per RFC. `Ob64::Base64::RFC4648` has `encode`, `decode`, `encode_urlsafe`, `decode_urlsafe`, `encoded_length_of` and `decoded_length_of` (were `Ob64::Base64.encode`, `decode`, `urlsafe_encode`, `urlsafe_decode`, `encoded_length_of` and `decoded_length_of`).

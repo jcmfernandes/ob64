@@ -4359,7 +4359,7 @@ pack_base64_xgetbv (uint32_t index)
 }
 
 #ifndef bit_AVX512vl
-#define bit_AVX512vl (1 << 31)
+#define bit_AVX512vl (1u << 31)
 #endif
 #ifndef bit_AVX512vbmi
 #define bit_AVX512vbmi (1 << 1)
