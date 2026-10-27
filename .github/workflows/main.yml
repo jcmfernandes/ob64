@@ -69,7 +69,7 @@ jobs:
 
       - name: Install Intel SDE if the CPU lacks AVX512
         if: runner.arch == 'X64'
-        run: .github/install-sde
+        run: .github/scripts/install-sde
 
       - name: Show codecs
         run: $SDE bundle exec ruby -Ilib -rob64 -e 'p Ob64.codecs, Ob64.codec'
@@ -106,7 +106,7 @@ jobs:
 
       - name: Install Intel SDE if the CPU lacks AVX512
         if: runner.arch == 'X64'
-        run: .github/install-sde
+        run: .github/scripts/install-sde
 
       - name: Test
         env:

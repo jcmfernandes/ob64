@@ -20,7 +20,7 @@ task "spec:c" do
   sh "#{ENV.fetch("CC", "cc")} -std=gnu99 -O3 -g -fsanitize=address,undefined -fno-sanitize-recover=all " \
     "-fno-omit-frame-pointer -Wall -Wextra -Wno-unused-parameter -Werror -Iext/ob64 -o tmp/codecs_test " \
     "spec/c/codecs_test.c ext/ob64/pack_base64.c ext/ob64/pack_uuencode.c"
-  # SDE: an emulator prefix, see .github/install-sde. It must run the test
+  # SDE: an emulator prefix, see .github/scripts/install-sde. It must run the test
   # itself: under SDE, ASan programs started by another one exit 0 unrun.
   sh "#{ENV["SDE"]} tmp/codecs_test #{ENV["SEED"]}"
 end
