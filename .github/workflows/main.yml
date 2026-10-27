@@ -80,6 +80,39 @@ jobs:
           OB64_CODECS: ${{ runner.arch == 'X64' && 'scalar,avx2,avx512' || 'scalar,neon64' }}
         run: $SDE bundle exec rake spec
 
+  codecs:
+    # The C codecs alone under ASan and UBSan, on exact-size buffers.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        cc: [gcc, clang]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Install Clang
+        if: matrix.cc == 'clang'
+        run: command -v clang || { sudo apt-get update && sudo apt-get install -y clang; }
+
+      - name: Install Intel SDE if the CPU lacks AVX512
+        if: runner.arch == 'X64'
+        run: .github/install-sde
+
+      - name: Test
+        env:
+          CC: ${{ matrix.cc }}
+          OB64_CODECS: ${{ runner.arch == 'X64' && 'scalar,avx2,avx512' || 'scalar,neon64' }}
+        run: bundle exec rake spec:c
+
   package:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
