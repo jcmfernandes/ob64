@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include "ob64.h"
+#include "ruby/encoding.h"
 
 VALUE mOb64 = Qnil;
 VALUE mOb64_Ext = Qnil;
@@ -51,6 +52,8 @@ VALUE Ob64_encode_string(VALUE self, VALUE bin, VALUE urlsafe, VALUE padding)
 
   pack_base64_encode(RSTRING_PTR(bin), bin_len, RSTRING_PTR(result), flags);
   rb_str_set_len(result, __encoded_length_of(bin_len, RTEST(padding)));
+  /* US-ASCII, as pack("m0") */
+  ENCODING_CODERANGE_SET(result, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
   RB_GC_GUARD(bin);
 
   return result;
