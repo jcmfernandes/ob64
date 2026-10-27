@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.8.0] - 2026-10-27
 
 - Fix undefined behavior in AVX512 detection.
 - `Ob64::Base64::RFC4648.encode` and `encode_urlsafe` return US-ASCII Strings, like `pack("m0")` (were BINARY).
