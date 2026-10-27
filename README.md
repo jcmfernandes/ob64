@@ -6,9 +6,52 @@
 
 A *fast* Base64 and uuencode encoder and decoder as a Ruby gem.
 
-How fast? Try it yourself, execute:
+How fast? Times faster than Ruby's own `pack` / `unpack1`, per call, measured with `benchmark.rb` on an AMD Ryzen 9 9900X (AVX512) with Ruby 3.4:
 
-    $ rake benchmark
+```mermaid
+%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#2a78d6"}}}}%%
+xychart-beta
+    title "1 kB input: times faster than Ruby"
+    x-axis ["m0 enc", "m0 dec", "url enc", "url dec", "m enc", "m dec", "u enc", "u dec"]
+    y-axis "times faster" 0 --> 45
+    bar [3.1, 4.8, 11.1, 12.6, 5.2, 3.9, 5.9, 4.2]
+```
+
+```mermaid
+%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#2a78d6"}}}}%%
+xychart-beta
+    title "4 kB input: times faster than Ruby"
+    x-axis ["m0 enc", "m0 dec", "url enc", "url dec", "m enc", "m dec", "u enc", "u dec"]
+    y-axis "times faster" 0 --> 45
+    bar [6.3, 8.4, 17.6, 22.9, 8.4, 6.1, 7.5, 5.2]
+```
+
+```mermaid
+%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#2a78d6"}}}}%%
+xychart-beta
+    title "16 kB input: times faster than Ruby"
+    x-axis ["m0 enc", "m0 dec", "url enc", "url dec", "m enc", "m dec", "u enc", "u dec"]
+    y-axis "times faster" 0 --> 45
+    bar [11.1, 12.6, 24.3, 32.8, 6.0, 7.0, 7.2, 5.3]
+```
+
+```mermaid
+%%{init: {"themeVariables": {"xyChart": {"plotColorPalette": "#2a78d6"}}}}%%
+xychart-beta
+    title "512 kB input: times faster than Ruby"
+    x-axis ["m0 enc", "m0 dec", "url enc", "url dec", "m enc", "m dec", "u enc", "u dec"]
+    y-axis "times faster" 0 --> 45
+    bar [14.0, 13.8, 39.2, 42.0, 7.7, 7.6, 7.3, 5.3]
+```
+
+- `m0`: RFC 4648 (`Ob64::Base64::RFC4648.encode` / `decode`)
+- `url`: RFC 4648 URL-safe (`encode_urlsafe` / `decode_urlsafe`), against Ruby's `pack("m0")` plus `tr`
+- `m`: RFC 2045 (`Ob64::Base64::RFC2045.encode` / `decode`)
+- `u`: uuencode (`Ob64::UU.encode` / `decode`)
+
+Try it yourself:
+
+    $ bin/rake compile benchmark
 
 ## Acknowledgements
 
