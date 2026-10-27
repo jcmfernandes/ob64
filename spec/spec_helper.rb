@@ -6,6 +6,8 @@ NATIVE_UNPACK = String.instance_method(:unpack)
 NATIVE_UNPACK1 = String.instance_method(:unpack1)
 
 require "ob64"
+require "ob64/core_ext"
+require_relative "support/variant_helpers"
 
 require "debug"
 
