@@ -45,6 +45,30 @@ RSpec.describe "Base64 RFC 4648, strict" do
     check_unpack(mismatches, label, string, formats)
   end
 
+  # Compares reading string through a Reader with Ruby's and decode
+  def check_reader(mismatches, label, string)
+    actual = outcome { read_all(string) { |io| Ob64::Base64::RFC4648::Reader.new(io) } }
+    check(mismatches, "Reader(#{label})", outcome { ruby_decode(string) }, actual)
+    check(mismatches, "Reader(#{label}) vs decode", outcome { Ob64::Base64::RFC4648.decode(string) }, actual)
+  end
+
+  def valid_inputs(size) = [ruby_encode(rng.bytes(size))]
+
+  def broken_inputs(size)
+    broken(ruby_encode(rng.bytes(size)), ["=", "\n", "\r", " ", "+", "/", "-", "_", "A", "\0", "\xFF"])
+  end
+
+  def garbage_inputs(size)
+    alphabet = [*"A".."Z", *"a".."z", *"0".."9", "+", "/", "=", "\n"]
+    uu_alphabet = [*" ".."`", "\n"]
+    [
+      rng.bytes(size),
+      Array.new(size) { alphabet.sample(random: rng) }.join.b,
+      Array.new(size) { uu_alphabet.sample(random: rng) }.join.b,
+      NATIVE_PACK.bind_call([rng.bytes(size)], "u")
+    ]
+  end
+
   each_codec do
     describe "fixed cases" do
       it "encodes" do
@@ -114,26 +138,16 @@ RSpec.describe "Base64 RFC 4648, strict" do
 
       it "decodes broken input like Ruby" do
         mismatches = []
-        pool = ["=", "\n", "\r", " ", "+", "/", "-", "_", "A", "\0", "\xFF"]
         sizes.each do |size|
-          broken(ruby_encode(rng.bytes(size)), pool).each do |string|
-            check_decode(mismatches, string.inspect[0, 100], string)
-          end
+          broken_inputs(size).each { |string| check_decode(mismatches, string.inspect[0, 100], string) }
         end
         expect_no_mismatches(mismatches)
       end
 
       it "decodes garbage like Ruby" do
         mismatches = []
-        alphabet = [*"A".."Z", *"a".."z", *"0".."9", "+", "/", "=", "\n"]
-        uu_alphabet = [*" ".."`", "\n"]
         sizes.each do |size|
-          [
-            rng.bytes(size),
-            Array.new(size) { alphabet.sample(random: rng) }.join.b,
-            Array.new(size) { uu_alphabet.sample(random: rng) }.join.b,
-            NATIVE_PACK.bind_call([rng.bytes(size)], "u")
-          ].each do |string|
+          garbage_inputs(size).each do |string|
             check_decode(mismatches, "#{size} bytes: #{string.inspect[0, 60]}", string)
           end
         end
@@ -152,6 +166,45 @@ RSpec.describe "Base64 RFC 4648, strict" do
               end
             end
           end
+        expect_no_mismatches(mismatches)
+      end
+    end
+
+    describe "streams" do
+      it "Writer encodes like encode" do
+        mismatches = []
+        sizes.each do |size|
+          bin = rng.bytes(size)
+          actual = write_all(bin) { |io| Ob64::Base64::RFC4648::Writer.new(io) }
+          check(mismatches, "Writer(#{size})", ruby_encode(bin), actual)
+          check(mismatches, "Writer(#{size}) vs encode", Ob64::Base64::RFC4648.encode(bin), actual)
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes valid input like decode" do
+        mismatches = []
+        sizes.each do |size|
+          valid_inputs(size).each { |string| check_reader(mismatches, "#{size} bytes, #{string.bytesize} chars", string) }
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes broken input like decode" do
+        mismatches = []
+        sizes.each do |size|
+          broken_inputs(size).each { |string| check_reader(mismatches, string.inspect[0, 100], string) }
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes garbage like decode" do
+        mismatches = []
+        sizes.each do |size|
+          garbage_inputs(size).each do |string|
+            check_reader(mismatches, "#{size} bytes: #{string.inspect[0, 60]}", string)
+          end
+        end
         expect_no_mismatches(mismatches)
       end
     end

@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "stringio"
+
 # Shared by the variant specs: spec/base64/*_spec.rb and spec/uu_spec.rb.
 module VariantHelpers
   module ClassMethods
@@ -19,6 +21,22 @@ module VariantHelpers
         end
       end
     end
+  end
+
+  # A StringIO whose readpartial and read(length) return random pieces of 1 byte to 4 KB
+  class Trickle < StringIO
+    def initialize(string, rng)
+      super(string)
+      @rng = rng
+    end
+
+    def readpartial(maxlen, outbuf = nil) = super([maxlen, piece].min, outbuf)
+
+    def read(length = nil, outbuf = nil) = super(length && [length, piece].min, outbuf)
+
+    private
+
+    def piece = @rng.rand(1..(@rng.rand(2).zero? ? 4 : 4096))
   end
 
   def self.included(base)
@@ -48,7 +66,7 @@ module VariantHelpers
 
   def encoding_of(value) = value.respond_to?(:encoding) ? value.encoding : nil
 
-  # Variants of string: "=" or "A" appended, "=" deleted, 1-3 edits (insert, replace or delete) each a byte from
+  # Variants of string: "=", "A" or string itself appended, "=" deleted, 1-3 edits (insert, replace or delete) each a byte from
   # pool or a random one, and a truncation
   def broken(string, pool)
     string = string.b
@@ -65,7 +83,7 @@ module VariantHelpers
       end
       s
     end
-    [string + "=", string + "A", string.delete("="), *edited, string[0, rng.rand(string.bytesize + 1)]]
+    [string + "=", string + "A", string + string, string.delete("="), *edited, string[0, rng.rand(string.bytesize + 1)]]
   end
 
   # Positions of a byte sweep in string: the first four, the middle, the last two, and extra
@@ -90,5 +108,51 @@ module VariantHelpers
 
   def expect_no_mismatches(mismatches)
     expect(mismatches).to be_empty, mismatches.first(20).join("\n")
+  end
+
+  # Writes bin, in random pieces (empty ones too) with write and <<, to the Writer the block builds on a StringIO;
+  # returns the io's string
+  def write_all(bin)
+    io = StringIO.new
+    writer = yield io
+    position = 0
+    loop do
+      piece = bin.byteslice(position, rng.rand(0..(rng.rand(2).zero? ? 4 : 4096)))
+      case rng.rand(3)
+      when 0 then writer << piece
+      when 1 then writer.write(piece)
+      else
+        cut = rng.rand(0..piece.bytesize)
+        writer.write(piece.byteslice(0, cut), piece.byteslice(cut..))
+      end
+      position += piece.bytesize
+      break if position == bin.bytesize && rng.rand(4).zero?
+    end
+    writer.finish.string
+  end
+
+  # Reads all with random read(length), read and readpartial calls from the Reader the block builds on a Trickle
+  # of string. Raises if a read is short before the end.
+  def read_all(string)
+    reader = yield Trickle.new(string, rng)
+    data = "".b
+    loop do
+      length = rng.rand(1..(rng.rand(2).zero? ? 4 : 4096))
+      case rng.rand(16)
+      when 0 then data << reader.read
+      when 1..7
+        chunk = reader.read(length)
+        break unless chunk
+        raise "short read(#{length}): #{chunk.bytesize}" if chunk.bytesize < length && !reader.eof?
+        data << chunk
+      else
+        chunk = reader.readpartial(length)
+        raise "readpartial(#{length}): #{chunk.bytesize}" unless chunk.bytesize.between?(1, length)
+        data << chunk
+      end
+    end
+    data
+  rescue EOFError
+    data
   end
 end

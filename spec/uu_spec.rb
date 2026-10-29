@@ -69,6 +69,51 @@ RSpec.describe "uuencode" do
     check_unpack(mismatches, label, string, formats)
   end
 
+  # Compares reading string through a Reader with Ruby's and decode
+  def check_reader(mismatches, label, string)
+    actual = outcome { read_all(string) { |io| Ob64::UU::Reader.new(io) } }
+    check(mismatches, "Reader(#{label})", outcome { ruby_decode(string) }, actual)
+    check(mismatches, "Reader(#{label}) vs decode", outcome { Ob64::UU.decode(string) }, actual)
+  end
+
+  # Mostly line lengths 3..63, sometimes the default format
+  def random_format = rng.rand(7).zero? ? "u" : "u#{rng.rand(3..63)}"
+
+  def valid_inputs(size) = [ruby_encode(rng.bytes(size), random_format)]
+
+  def broken_inputs(size)
+    pool = ["\n", "\r\n", "\r", " ", "\t", "`", "!", "~", "a", "=", "-", "_", "\0", "\x7F", "\x80", "\xFF"]
+    string = ruby_encode(rng.bytes(size), random_format).b
+    broken(string, pool) + line_variants(string, pool) + line_traps(string)
+  end
+
+  def garbage_inputs(size)
+    uu_alphabet = [*" ".."`", "\n"]
+    base64_alphabet = [*"A".."Z", *"a".."z", *"0".."9", "+", "/", "=", "\n"]
+    [
+      rng.bytes(size),
+      Array.new(size) { uu_alphabet.sample(random: rng) }.join.b,
+      Array.new(size) { base64_alphabet.sample(random: rng) }.join.b,
+      NATIVE_PACK.bind_call([rng.bytes(size)], "m")
+    ]
+  end
+
+  # Lines claiming more bytes than they carry (decoded only thanks to the output cap's slack from earlier lines), a
+  # stopping line ("a".."z", " " or blank) followed by valid lines, "\r\n" endings, no final newline
+  def line_traps(string)
+    lines = string.lines
+    stop_line = ["#{[*"a".."z"].sample(random: rng)}86)C\n", " \n", "\n"].sample(random: rng)
+    [
+      string + "M\n",
+      "M\n" * rng.rand(1..40) + string,
+      string + "M\n" * rng.rand(1..40) + string,
+      lines.dup.insert(rng.rand(lines.size + 1), "M#{"`" * rng.rand(0..59)}\n").join,
+      lines.dup.insert(rng.rand(lines.size + 1), stop_line).join + string,
+      string.gsub("\n", "\r\n").chomp,
+      string.chomp
+    ]
+  end
+
   # Line quirks and a "~" at 4 KB batch edges
   def line_variants(string, pool)
     lines = string.lines
@@ -154,24 +199,20 @@ RSpec.describe "uuencode" do
 
       it "decodes valid input" do
         mismatches = []
-        sizes.each_with_index do |size, i|
-          bin = rng.bytes(size)
-          format = (i % 7).zero? ? "u" : "u#{3 + i % 61}"
-          string = ruby_encode(bin, format)
-          check_decode(mismatches, "#{size} bytes in #{format}", string, [*unpack_formats, "m0000000000"])
-          check(mismatches, "decoded_length_of(#{size}, #{format})", size, Ob64::UU.decoded_length_of(string))
+        sizes.each do |size|
+          valid_inputs(size).each do |string|
+            check_decode(mismatches, "#{size} bytes, #{string.bytesize} chars", string, [*unpack_formats, "m0000000000"])
+            check(mismatches, "decoded_length_of(#{size})", size, Ob64::UU.decoded_length_of(string))
+          end
         end
         expect_no_mismatches(mismatches)
       end
 
       it "decodes broken input like Ruby" do
         mismatches = []
-        pool = ["\n", "\r\n", "\r", " ", "\t", "`", "!", "~", "a", "=", "-", "_", "\0", "\x7F", "\x80", "\xFF"]
-        sizes.each_with_index do |size, i|
-          format = (i % 7).zero? ? "u" : "u#{3 + i % 61}"
-          string = ruby_encode(rng.bytes(size), format).b
-          (broken(string, pool) + line_variants(string, pool)).each do |s|
-            check_decode(mismatches, s.inspect[0, 100], s, unpack_formats)
+        sizes.each do |size|
+          broken_inputs(size).each do |string|
+            check_decode(mismatches, string.inspect[0, 100], string, unpack_formats)
           end
         end
         expect_no_mismatches(mismatches)
@@ -179,15 +220,8 @@ RSpec.describe "uuencode" do
 
       it "decodes garbage like Ruby" do
         mismatches = []
-        uu_alphabet = [*" ".."`", "\n"]
-        base64_alphabet = [*"A".."Z", *"a".."z", *"0".."9", "+", "/", "=", "\n"]
         sizes.each do |size|
-          [
-            rng.bytes(size),
-            Array.new(size) { uu_alphabet.sample(random: rng) }.join.b,
-            Array.new(size) { base64_alphabet.sample(random: rng) }.join.b,
-            NATIVE_PACK.bind_call([rng.bytes(size)], "m")
-          ].each do |string|
+          garbage_inputs(size).each do |string|
             check_decode(mismatches, "#{size} bytes: #{string.inspect[0, 60]}", string, unpack_formats)
           end
         end
@@ -202,6 +236,45 @@ RSpec.describe "uuencode" do
             string = valid.dup
             string.setbyte(position, byte)
             check_decode(mismatches, "byte #{byte} at #{position}", string, unpack_formats)
+          end
+        end
+        expect_no_mismatches(mismatches)
+      end
+    end
+
+    describe "streams" do
+      it "Writer encodes like encode" do
+        mismatches = []
+        sizes.each do |size|
+          bin = rng.bytes(size)
+          actual = write_all(bin) { |io| Ob64::UU::Writer.new(io) }
+          check(mismatches, "Writer(#{size})", ruby_encode(bin), actual)
+          check(mismatches, "Writer(#{size}) vs encode", Ob64::UU.encode(bin), actual)
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes valid input like decode" do
+        mismatches = []
+        sizes.each do |size|
+          valid_inputs(size).each { |string| check_reader(mismatches, "#{size} bytes, #{string.bytesize} chars", string) }
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes broken input like decode" do
+        mismatches = []
+        sizes.each do |size|
+          broken_inputs(size).each { |string| check_reader(mismatches, string.inspect[0, 100], string) }
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes garbage like decode" do
+        mismatches = []
+        sizes.each do |size|
+          garbage_inputs(size).each do |string|
+            check_reader(mismatches, "#{size} bytes: #{string.inspect[0, 60]}", string)
           end
         end
         expect_no_mismatches(mismatches)

@@ -242,3 +242,5 @@ module Ob64
     end
   end
 end
+
+require_relative "ob64/streams"
