@@ -247,6 +247,31 @@ Ob64_uudecode(VALUE self, VALUE string)
   return uudecode(string);
 }
 
+/* Returns [decoded, stopped]: uudecode with the output capped at cap bytes; stopped: decoding ended before the end */
+static VALUE
+Ob64_uudecode_capped(VALUE self, VALUE string, VALUE cap)
+{
+  long c = NUM2LONG(cap);
+
+  StringValue(string);
+  if (c < 0) rb_raise(rb_eArgError, "negative cap: %ld", c);
+
+  long len = RSTRING_LEN(string);
+  /* Lines take 2+ chars (the last one 1+) and decode to 63 bytes at most: a larger cap is the same */
+  long lines = (len + 1) / 2;
+  if (c / 63 > lines) c = lines * 63;
+
+  int stopped;
+  /* +3: the decoder stores up to 3 bytes past a line's decoded length */
+  VALUE buf = rb_str_buf_new(c + 3);
+  size_t total = pack_uudecode_lines_capped(RSTRING_PTR(string), (size_t)len, RSTRING_PTR(buf), (size_t)c, &stopped);
+  RB_GC_GUARD(string);
+
+  rb_str_set_len(buf, (long)total);
+
+  return rb_assoc_new(buf, stopped ? Qtrue : Qfalse);
+}
+
 static VALUE
 Ob64_uuencoded_length_of(VALUE self, VALUE bin)
 {
@@ -284,6 +309,7 @@ Init_ob64_pack(VALUE mExt)
   rb_define_private_method(mExt, "__decoded_length_of_rfc_2045", Ob64_decoded_length_of_rfc_2045, 1);
   rb_define_private_method(mExt, "__uuencode", Ob64_uuencode, 1);
   rb_define_private_method(mExt, "__uudecode", Ob64_uudecode, 1);
+  rb_define_private_method(mExt, "__uudecode_capped", Ob64_uudecode_capped, 2);
   rb_define_private_method(mExt, "__uuencoded_length_of", Ob64_uuencoded_length_of, 1);
   rb_define_private_method(mExt, "__uudecoded_length_of", Ob64_uudecoded_length_of, 1);
 }
