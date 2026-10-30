@@ -13,6 +13,7 @@ module Ob64
 
     # Bytes of text pulled from the io at a time
     CHUNK = 65_536
+    private_constant :CHUNK
 
     # @param io [IO] - responds to +readpartial+
     def initialize(io)

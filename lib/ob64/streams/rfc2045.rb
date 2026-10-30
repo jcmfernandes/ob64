@@ -29,6 +29,7 @@ module Ob64
 
         # A group start followed by '=' after 2 or 3 alphabet characters
         ENDS = /\A(?:[^#{ALPHABET}]*[#{ALPHABET}]){2}.*=/mo
+        private_constant :ALPHABET, :ENDS
 
         private
 
