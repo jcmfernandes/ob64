@@ -4,6 +4,14 @@ RSpec.describe "Streams" do
   bin = (0..255).map(&:chr).join.b * 3 + "\0"
   big = Random.new(42).bytes(4 << 20)
 
+  # Returns the objects allocated by the block
+  def allocated
+    GC.start
+    before = GC.stat(:total_allocated_objects)
+    yield
+    GC.stat(:total_allocated_objects) - before
+  end
+
   # Writer => its module's encode
   {
     Ob64::Base64::RFC4648::Writer => Ob64::Base64::RFC4648.method(:encode),
@@ -24,8 +32,19 @@ RSpec.describe "Streams" do
 
       it "converts every argument before taking any" do
         expect(writer.write("abc", 1)).to eq(4)
-        expect { writer.write("def", BasicObject.new) }.to raise_error(NoMethodError)
+        expect { writer.write("def", BasicObject.new) }.to raise_error(TypeError)
         expect(writer.finish.string).to eq(encode.call("abc1"))
+      end
+
+      it "writes what the io failed to take with the next write" do
+        writes = 0
+        io.define_singleton_method(:write) do |string|
+          raise IOError, "full" if (writes += 1) == 1
+          super(string)
+        end
+        expect { writer << bin }.to raise_error(IOError, "full")
+        writer << bin
+        expect(writer.finish.string).to eq(encode.call(bin * 2))
       end
 
       it "flushes the io, keeping a partial group" do
@@ -68,6 +87,47 @@ RSpec.describe "Streams" do
           expect { writer << "a" }.to raise_error(IOError, "closed stream")
           expect { writer.flush }.to raise_error(IOError, "closed stream")
           expect { writer.finish }.to raise_error(IOError, "closed stream")
+        end
+      end
+
+      it "gives the io the same String on every write, which it must not keep" do
+        written = +""
+        strings = []
+        sink = Object.new
+        sink.define_singleton_method(:write) do |string|
+          strings << string
+          written << string
+          string.bytesize
+        end
+        writer = klass.new(sink)
+        writer << bin
+        writer.write(bin, "a", bin)
+        writer << bin
+        writer.finish
+        expect(strings.size).to be > 1
+        expect(strings).to all(be(strings.first))
+        expect(written).to eq(encode.call(bin * 2 + "a" + bin * 2))
+      end
+
+      context "with 1000 writes of 1000 bytes" do
+        chunk = Random.new(7).bytes(1000).freeze
+
+        # A binary StringIO, as one with another encoding converts what it is
+        # written, allocating
+        let(:io) { StringIO.new(+"".b) }
+
+        it "allocates nothing per <<" do
+          writer << chunk
+          count = allocated { 1000.times { writer << chunk } }
+          expect(count).to be < 20
+          expect(writer.finish.string).to eq(encode.call(chunk * 1001))
+        end
+
+        it "allocates only the arguments Array per write" do
+          writer.write(chunk)
+          count = allocated { 1000.times { writer.write(chunk) } }
+          expect(count).to be < 1020
+          expect(writer.finish.string).to eq(encode.call(chunk * 1001))
         end
       end
     end
@@ -168,14 +228,6 @@ RSpec.describe "Streams" do
         let(:io) { StringIO.new(encode.call(big)) }
         # Allocations allowed per 64 KiB pulled, and in all
         let(:slack) { io.size / 65_536 * 2 + 20 }
-
-        # Returns the objects allocated by the block
-        def allocated
-          GC.start
-          before = GC.stat(:total_allocated_objects)
-          yield
-          GC.stat(:total_allocated_objects) - before
-        end
 
         it "allocates nothing per read with outbuf" do
           reader = klass.new(io)

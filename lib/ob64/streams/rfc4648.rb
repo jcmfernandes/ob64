@@ -6,7 +6,8 @@ module Ob64
       # Writes the {RFC4648.encode} (or, with +urlsafe+,
       # {RFC4648.encode_urlsafe}) of the bytes written to it to an io.
       class Writer < Ob64::Writer
-        # @param io [IO] - responds to +write+
+        # @param io [IO] - responds to +write+; must not keep the String it is
+        #   given, as it is reused
         # @param urlsafe [Boolean] - if the ``URL and Filename Safe'' alphabet is used
         # @param padding [Boolean] - if the output must be padded
         def initialize(io, urlsafe: false, padding: true)
@@ -17,7 +18,7 @@ module Ob64
 
         private
 
-        def encode(bin) = __encode(bin, @urlsafe, @padding)
+        def encode(dst, src, off, len) = __encode_into(dst, src, off, len, @urlsafe, @padding)
       end
 
       # Reads the {RFC4648.decode} (or, with +urlsafe+,

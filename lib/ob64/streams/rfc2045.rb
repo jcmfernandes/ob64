@@ -5,7 +5,8 @@ module Ob64
     module RFC2045
       # Writes the {RFC2045.encode} of the bytes written to it to an io.
       class Writer < Ob64::Writer
-        # @param io [IO] - responds to +write+
+        # @param io [IO] - responds to +write+; must not keep the String it is
+        #   given, as it is reused
         # @param line_length [Integer] - characters per line, a positive multiple of 4
         # @param crlf [Boolean] - if lines end with CRLF instead of LF
         # @raise [ArgumentError] if +line_length+ is not a positive multiple of 4
@@ -18,7 +19,7 @@ module Ob64
 
         private
 
-        def encode(bin) = __encode_rfc_2045(bin, @line_length, @crlf)
+        def encode(dst, src, off, len) = __encode_rfc_2045_into(dst, src, off, len, @line_length, @crlf)
       end
 
       # Reads the {RFC2045.decode} of the text in an io.

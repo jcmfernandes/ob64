@@ -4,14 +4,15 @@ module Ob64
   module UU
     # Writes the {UU.encode} of the bytes written to it to an io.
     class Writer < Ob64::Writer
-      # @param io [IO] - responds to +write+
+      # @param io [IO] - responds to +write+; must not keep the String it is
+      #   given, as it is reused
       def initialize(io)
         super(io, 45)
       end
 
       private
 
-      def encode(bin) = __uuencode(bin)
+      def encode(dst, src, off, len) = __uuencode_into(dst, src, off, len)
     end
 
     # Reads the {UU.decode} of the text in an io. Like +decode+, never raises
