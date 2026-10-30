@@ -35,43 +35,76 @@ parse_format(VALUE fmt, long *count)
   return p[0];
 }
 
-/* Sets res's length to n and makes it a US-ASCII String, as native pack does */
+/* Makes res a US-ASCII String, as native pack does */
 static VALUE
-ascii_result(VALUE res, size_t n)
+ascii_result(VALUE res)
 {
-  rb_str_set_len(res, (long)n);
   ENCODING_CODERANGE_SET(res, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
 
   return res;
 }
 
+/* Per line of line_len bytes (a multiple of 3): a length byte, 4 chars per 3 bytes and a newline */
+static long
+uuencoded_length(long len, long line_len)
+{
+  ob64_check_encode_len((size_t)len);
+  long full = len / line_len, rest = len % line_len;
+
+  return full * (line_len / 3 * 4 + 2) + (rest ? (rest + 2) / 3 * 4 + 2 : 0);
+}
+
+/* Appends the uuencode of src[off, len], line_len bytes per line, to dst */
+static void
+uuencode_append(VALUE dst, VALUE src, long off, long len, long line_len)
+{
+  long dst_len = RSTRING_LEN(dst);
+  char *out = ob64_reserve(dst, uuencoded_length(len, line_len));
+  size_t n = pack_uuencode_lines(RSTRING_PTR(src) + off, (size_t)len, out, (size_t)line_len);
+  RB_GC_GUARD(src);
+
+  rb_str_set_len(dst, dst_len + (long)n);
+}
+
 static VALUE
 uuencode(VALUE from, long line_len)
 {
-  long plen = RSTRING_LEN(from);
-  /* A length byte and a newline per line */
-  long lines = (plen + line_len - 1) / line_len;
-  VALUE res = rb_str_buf_new((plen + 2) / 3 * 4 + lines * 2);
-  const char *src = RSTRING_PTR(from);
-  char *out = RSTRING_PTR(res);
-  size_t n = pack_uuencode_lines(src, (size_t)plen, out, (size_t)line_len);
-  RB_GC_GUARD(from);
+  VALUE res = rb_str_buf_new(0);
 
-  return ascii_result(res, n);
+  uuencode_append(res, from, 0, RSTRING_LEN(from), line_len);
+
+  return ascii_result(res);
 }
 
-/* line_len: bytes per line, a multiple of 3; crlf: lines end in "\r\n" */
-static VALUE
-base64_encode_rfc2045(VALUE from, long line_len, int crlf)
+/* line_bytes: bytes per line, a multiple of 3; 4 chars per 3 bytes, a line break per line */
+static long
+encoded_length_rfc2045(long len, long line_bytes, int crlf)
 {
-  long plen = RSTRING_LEN(from);
-  /* A line break per line */
-  long lines = (plen + line_len - 1) / line_len;
-  VALUE res = rb_str_buf_new((plen + 2) / 3 * 4 + lines * (crlf ? 2 : 1));
-  size_t n = pack_base64_encode_rfc2045(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), (int)line_len, crlf);
-  RB_GC_GUARD(from);
+  ob64_check_encode_len((size_t)len);
 
-  return ascii_result(res, n);
+  return (len + 2) / 3 * 4 + (len + line_bytes - 1) / line_bytes * (crlf ? 2 : 1);
+}
+
+/* Appends the encode of src[off, len] to dst; line_bytes as above, crlf: lines end in "\r\n" */
+static void
+encode_rfc2045_append(VALUE dst, VALUE src, long off, long len, long line_bytes, int crlf)
+{
+  long dst_len = RSTRING_LEN(dst);
+  char *out = ob64_reserve(dst, encoded_length_rfc2045(len, line_bytes, crlf));
+  size_t n = pack_base64_encode_rfc2045(RSTRING_PTR(src) + off, (size_t)len, out, (int)line_bytes, crlf);
+  RB_GC_GUARD(src);
+
+  rb_str_set_len(dst, dst_len + (long)n);
+}
+
+static VALUE
+base64_encode_rfc2045(VALUE from, long line_bytes, int crlf)
+{
+  VALUE res = rb_str_buf_new(0);
+
+  encode_rfc2045_append(res, from, 0, RSTRING_LEN(from), line_bytes, crlf);
+
+  return ascii_result(res);
 }
 
 static VALUE
@@ -90,11 +123,11 @@ Ob64_pack(int argc, VALUE *argv, VALUE ary)
   }
 
   if (type == 'm' && count == 0) {
-    VALUE res = rb_str_buf_new((plen + 2) / 3 * 4);
-    size_t n = pack_base64_encode(RSTRING_PTR(from), (size_t)plen, RSTRING_PTR(res), 0);
-    RB_GC_GUARD(from);
+    VALUE res = rb_str_buf_new(0);
 
-    return ascii_result(res, n);
+    ob64_encode_append(res, from, 0, plen, Qfalse, Qtrue);
+
+    return ascii_result(res);
   }
 
   long len = count;
@@ -179,18 +212,15 @@ Ob64_unpack1(int argc, VALUE *argv, VALUE str)
   return res;
 }
 
-/* Bytes per line for a line_length in chars; validates both arguments */
+/* Bytes per line for a line_length in chars; validates it */
 static long
-rfc2045_line_bytes(VALUE bin, VALUE line_length)
+rfc2045_line_bytes(VALUE line_length)
 {
   long chars = NUM2LONG(line_length);
 
-  StringValue(bin);
   if (chars < 4 || chars % 4 || chars / 4 * 3 > INT_MAX) {
     rb_raise(rb_eArgError, "line length must be a positive multiple of 4: %ld", chars);
   }
-  /* Bound the output size */
-  if (RSTRING_LEN(bin) > LONG_MAX / 4) rb_raise(rb_eArgError, "argument too big");
 
   return chars / 4 * 3;
 }
@@ -198,9 +228,25 @@ rfc2045_line_bytes(VALUE bin, VALUE line_length)
 static VALUE
 Ob64_encode_rfc_2045(VALUE self, VALUE bin, VALUE line_length, VALUE crlf)
 {
-  long line_bytes = rfc2045_line_bytes(bin, line_length);
+  long line_bytes = rfc2045_line_bytes(line_length);
+
+  StringValue(bin);
 
   return base64_encode_rfc2045(bin, line_bytes, RTEST(crlf));
+}
+
+static VALUE
+Ob64_encode_rfc_2045_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE len, VALUE line_length, VALUE crlf)
+{
+  StringValue(dst);
+  StringValue(src);
+  long o = NUM2LONG(off);
+  long n = ob64_src_range(dst, src, o, len);
+
+  encode_rfc2045_append(dst, src, o, n, rfc2045_line_bytes(line_length), RTEST(crlf));
+  RB_GC_GUARD(dst);
+
+  return dst;
 }
 
 /* Appends the decode of src[0, len] to dst; returns the bytes appended */
@@ -234,7 +280,7 @@ Ob64_decode_rfc_2045_into(VALUE self, VALUE dst, VALUE src, VALUE len)
 {
   StringValue(dst);
   StringValue(src);
-  size_t n = decode_rfc2045_append(dst, src, ob64_src_len(dst, src, len));
+  size_t n = decode_rfc2045_append(dst, src, ob64_src_range(dst, src, 0, len));
   RB_GC_GUARD(dst);
 
   return SIZET2NUM(n);
@@ -243,11 +289,11 @@ Ob64_decode_rfc_2045_into(VALUE self, VALUE dst, VALUE src, VALUE len)
 static VALUE
 Ob64_encoded_length_of_rfc_2045(VALUE self, VALUE bin, VALUE line_length, VALUE crlf)
 {
-  long line_bytes = rfc2045_line_bytes(bin, line_length);
-  long plen = RSTRING_LEN(bin);
+  long line_bytes = rfc2045_line_bytes(line_length);
 
-  /* 4 chars per 3 bytes, a line break per line */
-  return LONG2NUM((plen + 2) / 3 * 4 + (plen + line_bytes - 1) / line_bytes * (RTEST(crlf) ? 2 : 1));
+  StringValue(bin);
+
+  return LONG2NUM(encoded_length_rfc2045(RSTRING_LEN(bin), line_bytes, RTEST(crlf)));
 }
 
 static VALUE
@@ -266,6 +312,19 @@ Ob64_uuencode(VALUE self, VALUE bin)
   StringValue(bin);
 
   return uuencode(bin, 45);
+}
+
+static VALUE
+Ob64_uuencode_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE len)
+{
+  StringValue(dst);
+  StringValue(src);
+  long o = NUM2LONG(off);
+
+  uuencode_append(dst, src, o, ob64_src_range(dst, src, o, len), 45);
+  RB_GC_GUARD(dst);
+
+  return dst;
 }
 
 static VALUE
@@ -321,7 +380,7 @@ Ob64_uudecode_capped_into(VALUE self, VALUE dst, VALUE src, VALUE len, VALUE cap
 
   StringValue(dst);
   StringValue(src);
-  long n = ob64_src_len(dst, src, len);
+  long n = ob64_src_range(dst, src, 0, len);
   VALUE stopped = uudecode_capped_append(dst, src, n, c);
   RB_GC_GUARD(dst);
 
@@ -332,11 +391,8 @@ static VALUE
 Ob64_uuencoded_length_of(VALUE self, VALUE bin)
 {
   StringValue(bin);
-  long plen = RSTRING_LEN(bin);
-  /* Per line: a length byte, 4 chars per 3 bytes and a newline */
-  long full = plen / 45, rest = plen % 45;
 
-  return LONG2NUM(full * 62 + (rest ? (rest + 2) / 3 * 4 + 2 : 0));
+  return LONG2NUM(uuencoded_length(RSTRING_LEN(bin), 45));
 }
 
 static VALUE
@@ -360,11 +416,13 @@ Init_ob64_pack(VALUE mExt)
   rb_define_method(mUnpack, "unpack1", Ob64_unpack1, -1);
 
   rb_define_private_method(mExt, "__encode_rfc_2045", Ob64_encode_rfc_2045, 3);
+  rb_define_private_method(mExt, "__encode_rfc_2045_into", Ob64_encode_rfc_2045_into, 6);
   rb_define_private_method(mExt, "__decode_rfc_2045", Ob64_decode_rfc_2045, 1);
   rb_define_private_method(mExt, "__decode_rfc_2045_into", Ob64_decode_rfc_2045_into, 3);
   rb_define_private_method(mExt, "__encoded_length_of_rfc_2045", Ob64_encoded_length_of_rfc_2045, 3);
   rb_define_private_method(mExt, "__decoded_length_of_rfc_2045", Ob64_decoded_length_of_rfc_2045, 1);
   rb_define_private_method(mExt, "__uuencode", Ob64_uuencode, 1);
+  rb_define_private_method(mExt, "__uuencode_into", Ob64_uuencode_into, 4);
   rb_define_private_method(mExt, "__uudecode", Ob64_uudecode, 1);
   rb_define_private_method(mExt, "__uudecode_capped", Ob64_uudecode_capped, 2);
   rb_define_private_method(mExt, "__uudecode_capped_into", Ob64_uudecode_capped_into, 4);

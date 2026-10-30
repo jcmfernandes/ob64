@@ -124,6 +124,91 @@ RSpec.describe Ob64::Ext do
     end
   end
 
+  # [one-shot, argument sets] per appending helper: it appends to dst what the one-shot (nil: none) makes of
+  # src[off, len]
+  appends = {
+    "__encode_into" => [:__encode, [[false, true], [true, false], [false, false], [true, true]]],
+    "__encode_rfc_2045_into" => [:__encode_rfc_2045, [[76, false], [4, true], [8, false], [64, true]]],
+    "__uuencode_into" => [:__uuencode, [[]]],
+    "__append_into" => [nil, [[]]]
+  }
+
+  appends.each do |name, (_, arg_sets)|
+    describe name do
+      let(:src) { "\x00abc\xFFdefgh".b }
+      let(:args) { arg_sets[0] }
+
+      define_method(:into) { |dst, src, off, len| call(name, dst, src, off, len, *args) }
+
+      it "returns dst, keeping its encoding" do
+        dst = +"é"
+        expect(into(dst, src, 1, 3)).to be(dst)
+        expect(dst.encoding).to eq(Encoding::UTF_8)
+        expect(dst.byteslice(0, 2)).to eq("é")
+      end
+
+      it "raises FrozenError on a frozen dst" do
+        expect { into("ab".b.freeze, src, 0, 1) }.to raise_error(FrozenError)
+      end
+
+      it "raises ArgumentError when dst is src" do
+        dst = src.dup
+        expect { into(dst, dst, 0, 1) }.to raise_error(ArgumentError, "dst and src must differ")
+      end
+
+      it "raises ArgumentError on off and len out of src, leaving dst unchanged" do
+        [[-1, 0], [src.bytesize + 1, 0], [0, -1], [0, src.bytesize + 1], [1, src.bytesize], [2, 2**62]].each do |off, len|
+          dst = +"ab"
+          expect { into(dst, src, off, len) }.to raise_error(ArgumentError)
+          expect(dst).to eq("ab")
+        end
+      end
+    end
+  end
+
+  it "raises ArgumentError on an invalid line length to __encode_rfc_2045_into, leaving dst unchanged" do
+    [0, 3, 6, -4].each do |line_length|
+      dst = +"ab"
+      expect { call(:__encode_rfc_2045_into, dst, "abc", 0, 3, line_length, false) }
+        .to raise_error(ArgumentError, "line length must be a positive multiple of 4: #{line_length}")
+      expect(dst).to eq("ab")
+    end
+  end
+
+  it "clears dst's code range in __append_into" do
+    dst = +"aé"
+    expect(dst.valid_encoding?).to be(true)
+    call(:__append_into, dst, "\xFF".b, 0, 1)
+    expect(dst.valid_encoding?).to be(false)
+  end
+
+  each_codec do
+    # Random bytes, a random range of each appended to each dst prefix
+    appends.each do |name, (one_shot, arg_sets)|
+      it "#{name} appends what the one-shot makes" do
+        mismatches = []
+        [0, 1, 2, 3, 4, 5, 44, 45, 46, 63, 64, 65, 300, 3060, 4100, 70_000].each do |size|
+          src = rng.bytes(size)
+          arg_sets.each do |args|
+            off = rng.rand(0..size)
+            [[0, size], [off, rng.rand(0..(size - off))]].each do |o, len|
+              label = "#{name}(#{size} bytes, #{o}, #{len}, #{args.inspect})"
+              piece = src.byteslice(o, len)
+              expected = one_shot ? call(one_shot, piece, *args) : piece
+              prefixes.each do |prefix|
+                dst = prefix.dup
+                call(name, dst, src, o, len, *args)
+                check(mismatches, label, expected.b, dst.byteslice(prefix.bytesize..).b)
+                check(mismatches, "#{label} prefix", [prefix, prefix.encoding], [dst.byteslice(0, prefix.bytesize), dst.encoding])
+              end
+            end
+          end
+        end
+        expect_no_mismatches(mismatches)
+      end
+    end
+  end
+
   describe "__consume" do
     it "drops the first n bytes in place and returns str" do
       prefixes.each do |prefix|

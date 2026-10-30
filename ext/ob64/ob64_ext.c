@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stdbool.h>
 #include "ob64.h"
 #include "ruby/encoding.h"
@@ -10,10 +11,12 @@ static const char *const codec_names[PACK_CODECS] = { "scalar", "avx2", "avx512"
 static ID codec_ids[PACK_CODECS];
 
 VALUE Ob64_encode_string(VALUE self, VALUE bin, VALUE urlsafe, VALUE padding);
+VALUE Ob64_encode_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE len, VALUE urlsafe, VALUE padding);
 VALUE Ob64_decode_string(VALUE self, VALUE string, VALUE urlsafe, VALUE loose);
 VALUE Ob64_decode_into(VALUE self, VALUE dst, VALUE src, VALUE len, VALUE urlsafe, VALUE loose);
 VALUE Ob64_consume(VALUE self, VALUE str, VALUE n);
 VALUE Ob64_copy_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE n);
+VALUE Ob64_append_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE n);
 VALUE Ob64_encoded_length_of(VALUE self, VALUE bin, VALUE withPadding);
 VALUE Ob64_decoded_length_of(VALUE self, VALUE string);
 VALUE Ob64_codec(VALUE self);
@@ -36,10 +39,12 @@ Init_ob64_ext(void)
   mOb64_Ext = rb_define_module_under(mOb64, "Ext");
 
   rb_define_private_method(mOb64_Ext, "__encode", Ob64_encode_string, 3);
+  rb_define_private_method(mOb64_Ext, "__encode_into", Ob64_encode_into, 6);
   rb_define_private_method(mOb64_Ext, "__decode", Ob64_decode_string, 3);
   rb_define_private_method(mOb64_Ext, "__decode_into", Ob64_decode_into, 5);
   rb_define_private_method(mOb64_Ext, "__consume", Ob64_consume, 2);
   rb_define_private_method(mOb64_Ext, "__copy_into", Ob64_copy_into, 4);
+  rb_define_private_method(mOb64_Ext, "__append_into", Ob64_append_into, 4);
   rb_define_private_method(mOb64_Ext, "__encoded_length_of", Ob64_encoded_length_of, 2);
   rb_define_private_method(mOb64_Ext, "__decoded_length_of", Ob64_decoded_length_of, 1);
   rb_define_private_method(mOb64_Ext, "__codec", Ob64_codec, 0);
@@ -49,31 +54,22 @@ Init_ob64_ext(void)
   Init_ob64_pack(mOb64_Ext);
 }
 
-VALUE Ob64_encode_string(VALUE self, VALUE bin, VALUE urlsafe, VALUE padding)
-{
-  StringValue(bin);
-  size_t bin_len = RSTRING_LEN(bin);
-  VALUE result = rb_str_buf_new(__encoded_length_of(bin_len, true));
-  int flags = RTEST(urlsafe) ? PACK_BASE64_URL_SAFE : 0;
-
-  pack_base64_encode(RSTRING_PTR(bin), bin_len, RSTRING_PTR(result), flags);
-  rb_str_set_len(result, __encoded_length_of(bin_len, RTEST(padding)));
-  /* US-ASCII, as pack("m0") */
-  ENCODING_CODERANGE_SET(result, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
-  RB_GC_GUARD(bin);
-
-  return result;
-}
-
-/* Validates the _into arguments; returns len, a length of src's prefix */
-long ob64_src_len(VALUE dst, VALUE src, VALUE len)
+/* Validates the _into arguments; returns len, a length of src from off */
+long ob64_src_range(VALUE dst, VALUE src, long off, VALUE len)
 {
   long n = NUM2LONG(len);
 
   if (dst == src) rb_raise(rb_eArgError, "dst and src must differ");
-  if (n < 0 || n > RSTRING_LEN(src)) rb_raise(rb_eArgError, "length out of range: %ld", n);
+  if (off < 0 || off > RSTRING_LEN(src)) rb_raise(rb_eArgError, "offset out of range: %ld", off);
+  if (n < 0 || n > RSTRING_LEN(src) - off) rb_raise(rb_eArgError, "length out of range: %ld", n);
 
   return n;
+}
+
+/* Raises unless len bytes are few enough for any encode's size to fit a long */
+void ob64_check_encode_len(size_t len)
+{
+  if (len > LONG_MAX / 4) rb_raise(rb_eArgError, "argument too big");
 }
 
 /*
@@ -92,6 +88,43 @@ char *ob64_reserve(VALUE dst, long n)
   }
 
   return RSTRING_PTR(dst) + len;
+}
+
+/* Appends the encode of src[off, len] to dst */
+void ob64_encode_append(VALUE dst, VALUE src, long off, long len, VALUE urlsafe, VALUE padding)
+{
+  long dst_len = RSTRING_LEN(dst);
+  /* Room for padded output */
+  char *out = ob64_reserve(dst, (long)__encoded_length_of((size_t)len, true));
+  int flags = RTEST(urlsafe) ? PACK_BASE64_URL_SAFE : 0;
+
+  pack_base64_encode(RSTRING_PTR(src) + off, (size_t)len, out, flags);
+  rb_str_set_len(dst, dst_len + (long)__encoded_length_of((size_t)len, RTEST(padding)));
+  RB_GC_GUARD(src);
+}
+
+VALUE Ob64_encode_string(VALUE self, VALUE bin, VALUE urlsafe, VALUE padding)
+{
+  StringValue(bin);
+  VALUE result = rb_str_buf_new(0);
+
+  ob64_encode_append(result, bin, 0, RSTRING_LEN(bin), urlsafe, padding);
+  /* US-ASCII, as pack("m0") */
+  ENCODING_CODERANGE_SET(result, rb_usascii_encindex(), ENC_CODERANGE_7BIT);
+
+  return result;
+}
+
+VALUE Ob64_encode_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE len, VALUE urlsafe, VALUE padding)
+{
+  StringValue(dst);
+  StringValue(src);
+  long o = NUM2LONG(off);
+
+  ob64_encode_append(dst, src, o, ob64_src_range(dst, src, o, len), urlsafe, padding);
+  RB_GC_GUARD(dst);
+
+  return dst;
 }
 
 /* Appends the decode of src[0, len] to dst; on invalid input raises, dst unchanged */
@@ -127,7 +160,7 @@ VALUE Ob64_decode_into(VALUE self, VALUE dst, VALUE src, VALUE len, VALUE urlsaf
 {
   StringValue(dst);
   StringValue(src);
-  decode_append(dst, src, ob64_src_len(dst, src, len), urlsafe, loose);
+  decode_append(dst, src, ob64_src_range(dst, src, 0, len), urlsafe, loose);
   RB_GC_GUARD(dst);
 
   return dst;
@@ -149,24 +182,43 @@ VALUE Ob64_consume(VALUE self, VALUE str, VALUE n)
   return str;
 }
 
+/* Appends src[off, n] to dst */
+static void
+append(VALUE dst, VALUE src, long off, long n)
+{
+  long dst_len = RSTRING_LEN(dst);
+
+  memcpy(ob64_reserve(dst, n), RSTRING_PTR(src) + off, (size_t)n);
+  rb_str_set_len(dst, dst_len + n);
+  RB_GC_GUARD(src);
+}
+
 /* Replaces dst's content with src[off, n] */
 VALUE Ob64_copy_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE n)
 {
   StringValue(dst);
   StringValue(src);
   long o = NUM2LONG(off);
-  long c = NUM2LONG(n);
+  long c = ob64_src_range(dst, src, o, n);
 
-  if (dst == src) rb_raise(rb_eArgError, "dst and src must differ");
-  if (o < 0 || o > RSTRING_LEN(src)) rb_raise(rb_eArgError, "offset out of range: %ld", o);
-  if (c < 0 || c > RSTRING_LEN(src) - o) rb_raise(rb_eArgError, "length out of range: %ld", c);
   /* Independent before setting the length */
   rb_str_modify(dst);
   rb_str_set_len(dst, 0);
-  memcpy(ob64_reserve(dst, c), RSTRING_PTR(src) + o, (size_t)c);
-  rb_str_set_len(dst, c);
+  append(dst, src, o, c);
   RB_GC_GUARD(dst);
-  RB_GC_GUARD(src);
+
+  return dst;
+}
+
+/* Appends src[off, n] to dst */
+VALUE Ob64_append_into(VALUE self, VALUE dst, VALUE src, VALUE off, VALUE n)
+{
+  StringValue(dst);
+  StringValue(src);
+  long o = NUM2LONG(off);
+
+  append(dst, src, o, ob64_src_range(dst, src, o, n));
+  RB_GC_GUARD(dst);
 
   return dst;
 }
@@ -184,6 +236,7 @@ VALUE Ob64_decoded_length_of(VALUE self, VALUE string)
 
 size_t __encoded_length_of(size_t bin_len, bool withPadding)
 {
+  ob64_check_encode_len(bin_len);
   if (withPadding) {
     return (bin_len + 2) / 3 * 4;
   } else {
