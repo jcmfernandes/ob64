@@ -27,9 +27,15 @@ module Ob64
         # group ends the data
         ALPHABET = "A-Za-z0-9+/"
 
+        # Characters skipped
+        SKIPPED = "^#{ALPHABET}"
+
+        # Whether each byte is in ALPHABET
+        ALPHABETIC = Array.new(256) { |b| b.chr.count(ALPHABET) == 1 }.freeze
+
         # A group start followed by '=' after 2 or 3 alphabet characters
         ENDS = /\A(?:[^#{ALPHABET}]*[#{ALPHABET}]){2}.*=/mo
-        private_constant :ALPHABET, :ENDS
+        private_constant :ALPHABET, :SKIPPED, :ALPHABETIC, :ENDS
 
         private
 
@@ -37,23 +43,27 @@ module Ob64
         # rest, at most 3 of them, waits for more text unless a '=' in it ends
         # the data. A piece decoding to fewer bytes than its groups hold had a
         # '=' ending the data.
-        def decode(text, eof)
-          return [__decode_rfc_2045(text), ""] if eof
-
-          alpha = text.count(ALPHABET)
+        def decode(text, eof, dst)
           cut = text.bytesize
-          (alpha % 4).times { cut = text.byterindex(/[#{ALPHABET}]/o, cut - 1) }
-          bin = __decode_rfc_2045(text.byteslice(0, cut))
-          rest = text.byteslice(cut..)
-          if bin.bytesize < alpha / 4 * 3
+          unless eof
+            alpha = text.count(ALPHABET)
+            (alpha % 4).times do
+              cut -= 1
+              cut -= 1 until ALPHABETIC[text.getbyte(cut)]
+            end
+          end
+          n = __decode_rfc_2045_into(dst, text, cut)
+          __consume(text, cut)
+          return if eof
+
+          if n < alpha / 4 * 3
             stop
-            [bin, ""]
-          elsif ENDS.match?(rest)
+          elsif ENDS.match?(text)
             stop
-            [bin + __decode_rfc_2045(rest), ""]
+            __decode_rfc_2045_into(dst, text, text.bytesize)
           else
             # Without a '=' ending the data, only its alphabet characters count
-            [bin, rest.delete("^#{ALPHABET}")]
+            text.delete!(SKIPPED)
           end
         end
       end

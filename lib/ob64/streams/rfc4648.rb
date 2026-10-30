@@ -25,7 +25,7 @@ module Ob64
       # where +decode+ raises, possibly after returning the bytes before the bad
       # spot.
       class Reader < Ob64::Reader
-        # @param io [IO] - responds to +readpartial+
+        # @param io [IO] - responds to +readpartial(maxlen, outbuf)+
         # @param urlsafe [Boolean] - if the ``URL and Filename Safe'' alphabet is used;
         #   padding is then optional
         # @param loose [Boolean] - if unpadded input is accepted
@@ -40,14 +40,14 @@ module Ob64
 
         # Decodes groups of 4 strictly and, at eof, the rest as configured.
         # After '=', more text is invalid.
-        def decode(text, eof)
+        def decode(text, eof, dst)
           raise ArgumentError, "invalid base64" if @padded && !text.empty?
-          return [__decode(text, @urlsafe, @loose), ""] if eof
 
-          cut = text.bytesize / 4 * 4
-          piece = text.byteslice(0, cut)
-          @padded = true if piece.include?("=")
-          [__decode(piece, @urlsafe, false), text.byteslice(cut..)]
+          cut = eof ? text.bytesize : text.bytesize / 4 * 4
+          pad = text.byteindex("=")
+          @padded = true if pad && pad < cut
+          __decode_into(dst, text, cut, @urlsafe, eof && @loose)
+          __consume(text, cut)
         end
       end
     end

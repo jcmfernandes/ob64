@@ -4,8 +4,9 @@ module Ob64
   # Reads the decoded version of the text in an io, like an IO: {#read},
   # {#readpartial}, {#eof?}, {#close}.
   #
-  # Subclasses define +decode(text, eof)+, which decodes the pulled text not yet
-  # decoded and returns <tt>[decoded, text_to_keep]</tt>; kept text is passed
+  # Subclasses define +decode(text, eof, dst)+, which decodes from the front of
+  # +text+, the pulled text not yet decoded, appending the bytes to +dst+ and
+  # removing the decoded text from +text+, in place. The text left is passed
   # again, with more text after it, on the next call. At +eof+ (no more text),
   # it decodes all or raises. It may call +stop+ to ignore the rest of the io.
   class Reader
@@ -15,11 +16,16 @@ module Ob64
     CHUNK = 65_536
     private_constant :CHUNK
 
-    # @param io [IO] - responds to +readpartial+
+    # @param io [IO] - responds to +readpartial(maxlen, outbuf)+
     def initialize(io)
       @io = io
+      # The last text pulled
+      @chunk = "".b
+      # The text not yet decoded
       @text = "".b
+      # The data decoded; bytes before @off are already read
       @data = "".b
+      @off = 0
       @pulled = 0
       @decoded = 0
       @done = false
@@ -37,11 +43,11 @@ module Ob64
       raise ArgumentError, "negative length #{length} given" if length&.negative?
 
       fill(length || Float::INFINITY)
-      if length&.positive? && @data.empty?
+      if length&.positive? && available.zero?
         outbuf&.clear
         return
       end
-      output(take(length || @data.bytesize), outbuf)
+      output(length || available, outbuf)
     end
 
     # Reads 1 to +maxlen+ bytes, as soon as any are decoded, like
@@ -58,12 +64,12 @@ module Ob64
 
       if maxlen.positive?
         fill(1)
-        if @data.empty?
+        if available.zero?
           outbuf&.clear
           raise EOFError, "end of file reached"
         end
       end
-      output(take(maxlen), outbuf)
+      output(maxlen, outbuf)
     end
 
     # Returns whether all the data was read. Pulls text from the io until some
@@ -73,7 +79,7 @@ module Ob64
     # @raise [ArgumentError] if the text cannot be decoded
     def eof?
       fill(1)
-      @data.empty?
+      available.zero?
     end
     alias_method :eof, :eof?
 
@@ -90,41 +96,54 @@ module Ob64
     # Bytes of text pulled from the io so far
     attr_reader :pulled
 
-    # Bytes decoded so far: returned by +decode+, not kept text
+    # Bytes decoded so far: appended by +decode+
     attr_reader :decoded
 
-    # Ignores the rest of the io: the data ends with what +decode+ returns
+    # Ignores the rest of the io: the data ends with what +decode+ appends
     def stop
       @done = true
     end
 
+    # Bytes decoded and not yet read
+    def available = @data.bytesize - @off
+
     # Decodes until +length+ bytes are ready or the data ends
     def fill(length)
-      until @data.bytesize >= length || @done
-        chunk = pull
-        @text << chunk if chunk
-        bin, @text = decode(@text, chunk.nil?)
-        @data << bin
-        @decoded += bin.bytesize
-        @done ||= chunk.nil?
+      until available >= length || @done
+        eof = !pull
+        # Drops the bytes read, keeping the buffer
+        __consume(@data, @off) if @off > 0
+        @off = 0
+        size = @data.bytesize
+        decode(@text, eof, @data)
+        @decoded += @data.bytesize - size
+        @done ||= eof
       end
     end
 
-    # Returns the next text from the io, binary, or nil at its end
+    # Appends the next text from the io to @text; false at its end
     def pull
-      chunk = @io.readpartial(CHUNK)
+      chunk = @io.readpartial(CHUNK, @chunk)
       @pulled += chunk.bytesize
-      chunk.b
+      # A copy only if the io returned a String of its own
+      @text << (chunk.equal?(@chunk) ? chunk.force_encoding(Encoding::BINARY) : chunk.b)
+      true
     rescue EOFError
-      nil
+      false
     end
 
-    def take(length)
-      data = @data.byteslice(0, length)
-      @data = @data.byteslice(data.bytesize..)
-      data
+    # Returns the next +length+ bytes at most, in +outbuf+ if given
+    def output(length, outbuf)
+      n = available
+      n = length if length < n
+      if outbuf
+        __copy_into(outbuf, @data, @off, n)
+        outbuf.force_encoding(Encoding::BINARY)
+      else
+        outbuf = @data.byteslice(@off, n)
+      end
+      @off += n
+      outbuf
     end
-
-    def output(data, outbuf) = outbuf ? outbuf.replace(data) : data
   end
 end

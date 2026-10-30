@@ -131,22 +131,24 @@ module VariantHelpers
     writer.finish.string
   end
 
-  # Reads all with random read(length), read and readpartial calls from the Reader the block builds on a Trickle
-  # of string. Raises if a read is short before the end.
+  # Reads all with random read(length), read and readpartial calls, some with an outbuf, from the Reader the block
+  # builds on a Trickle of string. Raises if a read is short before the end.
   def read_all(string)
     reader = yield Trickle.new(string, rng)
     data = "".b
+    buf = +""
     loop do
       length = rng.rand(1..(rng.rand(2).zero? ? 4 : 4096))
+      outbuf = rng.rand(2).zero? ? buf : nil
       case rng.rand(16)
-      when 0 then data << reader.read
+      when 0 then data << reader.read(nil, outbuf)
       when 1..7
-        chunk = reader.read(length)
+        chunk = reader.read(length, outbuf)
         break unless chunk
         raise "short read(#{length}): #{chunk.bytesize}" if chunk.bytesize < length && !reader.eof?
         data << chunk
       else
-        chunk = reader.readpartial(length)
+        chunk = reader.readpartial(length, outbuf)
         raise "readpartial(#{length}): #{chunk.bytesize}" unless chunk.bytesize.between?(1, length)
         data << chunk
       end

@@ -21,17 +21,21 @@ module Ob64
 
       # Decodes whole lines. Like +decode+, the output is capped at 3/4 of the
       # text's length, and a cap reached may change how later lines parse: a
-      # piece reaching the cap before eof waits for more text. Malformed lines
-      # that keep reaching it are decoded again on each pull.
-      def decode(text, eof)
+      # piece reaching the cap before eof waits for more text, its bytes
+      # removed. Malformed lines that keep reaching it are decoded again on
+      # each pull.
+      def decode(text, eof, dst)
         cut = eof ? text.bytesize : (text.rindex("\n") || -1) + 1
-        piece = text.byteslice(0, cut)
+        size = dst.bytesize
         cap = pulled * 3 / 4 - decoded
-        bin, stopped = __uudecode_capped(piece, cap)
-        return ["".b, text] if bin.bytesize == cap && !eof
+        stopped = __uudecode_capped_into(dst, text, cut, cap)
+        if dst.bytesize - size == cap && !eof
+          dst.slice!(size..)
+          return
+        end
 
         stop if stopped
-        [bin, text.byteslice(cut..)]
+        __consume(text, cut)
       end
     end
   end

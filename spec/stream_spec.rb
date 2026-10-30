@@ -2,6 +2,7 @@
 
 RSpec.describe "Streams" do
   bin = (0..255).map(&:chr).join.b * 3 + "\0"
+  big = Random.new(42).bytes(4 << 20)
 
   # Writer => its module's encode
   {
@@ -131,10 +132,19 @@ RSpec.describe "Streams" do
       it "returns what is decoded without waiting for more text" do
         blocked = Object.new
         chunks = [encode.call("abcdef".b)]
-        blocked.define_singleton_method(:readpartial) do |_maxlen|
-          chunks.empty? ? raise("blocked") : chunks.shift
+        blocked.define_singleton_method(:readpartial) do |_maxlen, outbuf|
+          chunks.empty? ? raise("blocked") : outbuf.replace(chunks.shift)
         end
         expect(klass.new(blocked).readpartial(1_000_000)).to eq("abcdef")
+      end
+
+      it "reads an io returning frozen Strings of its own" do
+        frozen = Object.new
+        text = encode.call(bin).freeze
+        frozen.define_singleton_method(:readpartial) do |_maxlen, _outbuf|
+          text.empty? ? raise(EOFError) : text.tap { text = "" }
+        end
+        expect(klass.new(frozen).read).to eq(bin)
       end
 
       it "tells eof" do
@@ -152,6 +162,37 @@ RSpec.describe "Streams" do
       it "closes the io and returns nil from close" do
         expect(reader.close).to be_nil
         expect(io).to be_closed
+      end
+
+      context "with 4 MB of text" do
+        let(:io) { StringIO.new(encode.call(big)) }
+        # Allocations allowed per 64 KiB pulled, and in all
+        let(:slack) { io.size / 65_536 * 2 + 20 }
+
+        # Returns the objects allocated by the block
+        def allocated
+          GC.start
+          before = GC.stat(:total_allocated_objects)
+          yield
+          GC.stat(:total_allocated_objects) - before
+        end
+
+        it "allocates nothing per read with outbuf" do
+          reader = klass.new(io)
+          outbuf = +""
+          total = 0
+          count = allocated { total += outbuf.bytesize while reader.read(1000, outbuf) }
+          expect(total).to eq(big.bytesize)
+          expect(count).to be < slack
+        end
+
+        it "allocates a String per read without outbuf" do
+          reader = klass.new(io)
+          reads = 0
+          count = allocated { reads += 1 while reader.read(1000) }
+          expect(reads).to eq((big.bytesize + 999) / 1000)
+          expect(count).to be_between(reads, reads + slack)
+        end
       end
     end
   end
