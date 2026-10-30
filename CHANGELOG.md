@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.9.0] - 2026-10-30
 
 - Add streams: `Writer` and `Reader` in `Ob64::Base64::RFC4648`, `Ob64::Base64::RFC2045` and `Ob64::UU` wrap an IO, encoding on write and decoding on read, with the same output as `encode` and `decode`.
 
