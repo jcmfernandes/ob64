@@ -82,9 +82,6 @@ RSpec.describe "Base64 RFC 2045" do
   decode_formats = %w[m m* m3 m60].freeze
   line_lengths = [nil, 4, 60, 76, 400, 4096, 6668].freeze
 
-  junk = ["\n", "\r\n", "\r", " ", "\t", "\0", "\x80", "\xFF", "-", "_", "!", "~", "a", "=", "+", "/", "A"]
-    .map { |byte| byte.b.freeze }.freeze
-
   def ruby_encode(bin, line_length = nil, crlf: false)
     string = NATIVE_PACK.bind_call([bin], line_length ? "m#{line_length / 4 * 3}" : "m")
     crlf ? string.gsub("\n", "\r\n") : string
@@ -150,6 +147,51 @@ RSpec.describe "Base64 RFC 2045" do
     end
   end
 
+  # Runs of 1 to 5000 bytes from pool inserted at random places
+  def runs_variant(encoded, pool)
+    s = encoded.b
+    rng.rand(1..4).times do
+      run = Array.new(rng.rand(1..(rng.rand(2).zero? ? 8 : 5000))) { pool.sample(random: rng) }.join.b
+      s.insert(rng.rand(0..s.bytesize), run)
+    end
+    s
+  end
+
+  # Compares reading string through a Reader with Ruby's and decode
+  def check_reader(mismatches, label, string)
+    actual = outcome { read_all(string) { |io| Ob64::Base64::RFC2045::Reader.new(io) } }
+    check(mismatches, "Reader(#{label})", outcome { ruby_decode(string) }, actual)
+    check(mismatches, "Reader(#{label}) vs decode", outcome { Ob64::Base64::RFC2045.decode(string) }, actual)
+  end
+
+  def valid_inputs(size)
+    bin = rng.bytes(size)
+    [ruby_encode(bin), ruby_encode(bin, 76, crlf: true), NATIVE_PACK.bind_call([bin], "m0")]
+  end
+
+  # Broken encodings; "=" at each group position; runs of junk, with and without "="
+  def broken_inputs(size)
+    pool = ["\n", "\r\n", "\r", " ", "\t", "\0", "\x80", "\xFF", "-", "_", "!", "~", "a", "=", "+", "/", "A"].map(&:b)
+    bin = rng.bytes(size)
+    encodings = [ruby_encode(bin), NATIVE_PACK.bind_call([bin], %w[m0 m3 m60 m76 m300 m999].sample(random: rng))]
+    encodings.flat_map do |encoded|
+      encoded = encoded.b
+      broken(encoded, pool) + m_variants(encoded, pool) +
+        [runs_variant(encoded, pool), runs_variant(encoded, pool - ["="])]
+    end + equals_variants(size, pool)
+  end
+
+  def garbage_inputs(size)
+    alphabet = [*"A".."Z", *"a".."z", *"0".."9", "+", "/", "=", "\n"]
+    uu_alphabet = [*" ".."`", "\n"]
+    [
+      rng.bytes(size),
+      Array.new(size) { alphabet.sample(random: rng) }.join.b,
+      Array.new(size) { uu_alphabet.sample(random: rng) }.join.b,
+      NATIVE_PACK.bind_call([rng.bytes(size)], "u")
+    ]
+  end
+
   each_codec do
     describe "fixed cases" do
       it "encodes" do
@@ -191,12 +233,17 @@ RSpec.describe "Base64 RFC 2045" do
             expect { Ob64::Base64::RFC2045.public_send(method, "ab", line_length) }
               .to raise_error(ArgumentError, "line length must be a positive multiple of 4: #{line_length}")
           end
+          expect { Ob64::Base64::RFC2045::Writer.new(StringIO.new, line_length) }
+            .to raise_error(ArgumentError, "line length must be a positive multiple of 4: #{line_length}")
         end
         %i[encode encoded_length_of].each do |method|
           expect { Ob64::Base64::RFC2045.public_send(method, "ab", "60") }
             .to raise_error(TypeError, "no implicit conversion of String into Integer")
           expect { Ob64::Base64::RFC2045.public_send(method, "ab", 2**64) }.to raise_error(RangeError)
         end
+        expect { Ob64::Base64::RFC2045::Writer.new(StringIO.new, "60") }
+          .to raise_error(TypeError, "no implicit conversion of String into Integer")
+        expect { Ob64::Base64::RFC2045::Writer.new(StringIO.new, 2**64) }.to raise_error(RangeError)
       end
     end
 
@@ -241,14 +288,7 @@ RSpec.describe "Base64 RFC 2045" do
       it "decodes broken input like Ruby" do
         mismatches = []
         sizes.each do |size|
-          bin = rng.bytes(size)
-          [ruby_encode(bin), NATIVE_PACK.bind_call([bin], %w[m0 m3 m60 m76 m300 m999].sample(random: rng))].each do |encoded|
-            encoded = encoded.b
-            (broken(encoded, junk) + m_variants(encoded, junk)).each do |string|
-              check_decode(mismatches, string.inspect[0, 100], string, decode_formats)
-            end
-          end
-          equals_variants(size, junk).each do |string|
+          broken_inputs(size).each do |string|
             check_decode(mismatches, string.inspect[0, 100], string, decode_formats)
           end
         end
@@ -257,15 +297,8 @@ RSpec.describe "Base64 RFC 2045" do
 
       it "decodes garbage like Ruby" do
         mismatches = []
-        alphabet = [*"A".."Z", *"a".."z", *"0".."9", "+", "/", "=", "\n"]
-        uu_alphabet = [*" ".."`", "\n"]
         sizes.each do |size|
-          [
-            rng.bytes(size),
-            Array.new(size) { alphabet.sample(random: rng) }.join.b,
-            Array.new(size) { uu_alphabet.sample(random: rng) }.join.b,
-            NATIVE_PACK.bind_call([rng.bytes(size)], "u")
-          ].each do |string|
+          garbage_inputs(size).each do |string|
             check_decode(mismatches, "#{size} bytes: #{string.inspect[0, 60]}", string, decode_formats)
           end
         end
@@ -280,6 +313,49 @@ RSpec.describe "Base64 RFC 2045" do
             string = valid.dup
             string.setbyte(position, byte)
             check_decode(mismatches, "byte #{byte} at #{position}", string, decode_formats)
+          end
+        end
+        expect_no_mismatches(mismatches)
+      end
+    end
+
+    describe "streams" do
+      it "Writer encodes like encode" do
+        mismatches = []
+        sizes.each do |size|
+          bin = rng.bytes(size)
+          line_length = line_lengths.sample(random: rng)
+          crlf = rng.rand(2).zero?
+          label = "#{size}, #{line_length.inspect}, crlf: #{crlf}"
+          actual = write_all(bin) { |io| Ob64::Base64::RFC2045::Writer.new(io, *line_length, crlf: crlf) }
+          check(mismatches, "Writer(#{label})", ruby_encode(bin, *line_length, crlf: crlf), actual)
+          check(mismatches, "Writer(#{label}) vs encode",
+            Ob64::Base64::RFC2045.encode(bin, *line_length, crlf: crlf), actual)
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes valid input like decode" do
+        mismatches = []
+        sizes.each do |size|
+          valid_inputs(size).each { |string| check_reader(mismatches, "#{size} bytes, #{string.bytesize} chars", string) }
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes broken input like decode" do
+        mismatches = []
+        sizes.each do |size|
+          broken_inputs(size).each { |string| check_reader(mismatches, string.inspect[0, 100], string) }
+        end
+        expect_no_mismatches(mismatches)
+      end
+
+      it "Reader decodes garbage like decode" do
+        mismatches = []
+        sizes.each do |size|
+          garbage_inputs(size).each do |string|
+            check_reader(mismatches, "#{size} bytes: #{string.inspect[0, 60]}", string)
           end
         end
         expect_no_mismatches(mismatches)

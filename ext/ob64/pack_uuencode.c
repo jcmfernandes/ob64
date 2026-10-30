@@ -1694,11 +1694,9 @@ uu_decode_batch(pack_bulk_loop loop, const uint8_t *src, size_t n, uint8_t *out)
 }
 
 size_t
-pack_uudecode_lines(const char *src, size_t srclen, char *out)
+pack_uudecode_lines_capped(const char *src, size_t srclen, char *out, size_t cap, int *stopped)
 {
-    struct uu_walk w = {
-        (const uint8_t *)src, (const uint8_t *)src + srclen, (uint8_t *)out, 0, pack_uudecode_cap(srclen)
-    };
+    struct uu_walk w = { (const uint8_t *)src, (const uint8_t *)src + srclen, (uint8_t *)out, 0, cap };
     pack_bulk_loop loop = out ? pack_simd_dec_loop() : NULL;
 
     if (loop) {
@@ -1732,10 +1730,20 @@ pack_uudecode_lines(const char *src, size_t srclen, char *out)
                 w.out += n / 4 * 3;
                 continue;
             }
-            if (!uu_walk_line(&w)) return w.total;
+            if (!uu_walk_line(&w)) break;
         }
     }
 
+    /* Resumes after an invalid batch; a no-op once the loop ended */
     while (uu_walk_line(&w)) {}
+    *stopped = w.s < w.send;
     return w.total;
+}
+
+size_t
+pack_uudecode_lines(const char *src, size_t srclen, char *out)
+{
+    int stopped;
+
+    return pack_uudecode_lines_capped(src, srclen, out, pack_uudecode_cap(srclen), &stopped);
 }

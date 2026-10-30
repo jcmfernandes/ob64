@@ -123,6 +123,28 @@ Ob64::UU.decode(string)
 # "This is data!"
 ```
 
+### Streams
+
+Each module has a `Writer` and a `Reader` that wrap an IO, encoding on write and decoding on read. Output is the same as `encode` / `decode` on the whole content.
+
+```ruby
+File.open("data.b64", "wb") do |file|
+  writer = Ob64::Base64::RFC4648::Writer.new(file)
+  writer.write(chunk1)
+  writer << chunk2
+  writer.finish   # writes the padding; close also closes the file
+end
+
+reader = Ob64::Base64::RFC4648::Reader.new(File.open("data.b64", "rb"))
+reader.read(1024)   # up to 1024 decoded bytes
+reader.read         # the rest
+reader.close
+
+IO.copy_stream(Ob64::UU::Reader.new(socket), file)
+```
+
+`Writer.new` and `Reader.new` take the same options as `encode` and `decode`: `urlsafe:`, `padding:` and `loose:` for RFC 4648, `line_length` and `crlf:` for RFC 2045. Readers need an IO with `readpartial`.
+
 ### Codecs
 
 The best codec this CPU runs is picked at load and used for every call. `Ob64.codec=` forces one for the whole process (e.g. `:scalar`, plain C).
@@ -165,10 +187,6 @@ To install this gem onto your local machine, run `bundle exec rake install`. To 
 ## Contributing
 
 Bug reports and pull requests are welcome on GitHub at https://github.com/jcmfernandes/ob64. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](https://github.com/jcmfernandes/ob64/blob/master/CODE_OF_CONDUCT.md).
-
-## TODO
-
-* Streaming interface
 
 ## License
 

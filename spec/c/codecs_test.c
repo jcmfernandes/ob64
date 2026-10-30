@@ -54,6 +54,7 @@ struct result {
 	int ok;
 	size_t len;
 	char *buf;
+	int stopped;
 };
 
 static unsigned long long seed;
@@ -62,10 +63,14 @@ static size_t failures;
 static void
 check(const char *op, int codec, const char *in, size_t inlen, struct result want, struct result got)
 {
-	if (want.ok == got.ok && (!want.ok || (want.len == got.len && !memcmp(want.buf, got.buf, want.len)))) return;
+	if (want.ok == got.ok && want.stopped == got.stopped &&
+	    (!want.ok || (want.len == got.len && !memcmp(want.buf, got.buf, want.len)))) {
+		return;
+	}
 
-	fprintf(stderr, "FAIL %s, %s, input length %zu, seed %llu: scalar ok=%d len=%zu, %s ok=%d len=%zu\n",
-		op, codec_names[codec], inlen, seed, want.ok, want.len, codec_names[codec], got.ok, got.len);
+	fprintf(stderr, "FAIL %s, %s, input length %zu, seed %llu: scalar ok=%d len=%zu stopped=%d, %s ok=%d len=%zu stopped=%d\n",
+		op, codec_names[codec], inlen, seed, want.ok, want.len, want.stopped, codec_names[codec], got.ok, got.len,
+		got.stopped);
 	fprintf(stderr, "  input:");
 	for (size_t i = 0; i < inlen && i < 64; i++) fprintf(stderr, " %02x", (unsigned char)in[i]);
 	fprintf(stderr, "%s\n", inlen > 64 ? " ..." : "");
@@ -77,7 +82,7 @@ check(const char *op, int codec, const char *in, size_t inlen, struct result wan
 static struct result
 encode(const char *in, size_t n, int flags)
 {
-	struct result r = { 1, 0, malloc((n + 2) / 3 * 4 + 1) };
+	struct result r = { 1, 0, malloc((n + 2) / 3 * 4 + 1), 0 };
 
 	r.len = pack_base64_encode(in, n, r.buf, flags);
 	return r;
@@ -87,7 +92,7 @@ static struct result
 decode(const char *in, size_t n, int flags)
 {
 	/* The smaller of ob64_ext.c's and ob64_pack.c's */
-	struct result r = { 0, 0, malloc((n + 3) / 4 * 3 + 1) };
+	struct result r = { 0, 0, malloc((n + 3) / 4 * 3 + 1), 0 };
 
 	r.ok = pack_base64_decode(in, n, r.buf, &r.len, flags);
 	return r;
@@ -97,7 +102,7 @@ static struct result
 encode_rfc2045(const char *in, size_t n, int bytes_per_line, int crlf)
 {
 	size_t lines = (n + bytes_per_line - 1) / bytes_per_line;
-	struct result r = { 1, 0, malloc((n + 2) / 3 * 4 + lines * (crlf ? 2 : 1) + 1) };
+	struct result r = { 1, 0, malloc((n + 2) / 3 * 4 + lines * (crlf ? 2 : 1) + 1), 0 };
 
 	r.len = pack_base64_encode_rfc2045(in, n, r.buf, bytes_per_line, crlf);
 	return r;
@@ -106,7 +111,7 @@ encode_rfc2045(const char *in, size_t n, int bytes_per_line, int crlf)
 static struct result
 decode_rfc2045(const char *in, size_t n)
 {
-	struct result r = { 1, 0, malloc(n / 4 * 3 + 3 + 1) };
+	struct result r = { 1, 0, malloc(n / 4 * 3 + 3 + 1), 0 };
 
 	r.len = pack_base64_decode_rfc2045(in, n, r.buf);
 	if (pack_base64_decoded_length_rfc2045(in, n) != r.len) {
@@ -120,7 +125,7 @@ static struct result
 uuencode(const char *in, size_t n, size_t line_len)
 {
 	size_t lines = (n + line_len - 1) / line_len;
-	struct result r = { 1, 0, malloc((n + 2) / 3 * 4 + lines * 2 + 1) };
+	struct result r = { 1, 0, malloc((n + 2) / 3 * 4 + lines * 2 + 1), 0 };
 
 	r.len = pack_uuencode_lines(in, n, r.buf, line_len);
 	return r;
@@ -129,7 +134,7 @@ uuencode(const char *in, size_t n, size_t line_len)
 static struct result
 uudecode(const char *in, size_t n)
 {
-	struct result r = { 1, 0, malloc(pack_uudecode_cap(n) + 3 + 1) };
+	struct result r = { 1, 0, malloc(pack_uudecode_cap(n) + 3 + 1), 0 };
 
 	r.len = pack_uudecode_lines(in, n, r.buf);
 	if (pack_uudecode_lines(in, n, NULL) != r.len) {
@@ -139,14 +144,28 @@ uudecode(const char *in, size_t n)
 	return r;
 }
 
+static struct result
+uudecode_capped(const char *in, size_t n, size_t cap)
+{
+	struct result r = { 1, 0, malloc(cap + 3 + 1), 0 };
+	int stopped;
+
+	r.len = pack_uudecode_lines_capped(in, n, r.buf, cap, &r.stopped);
+	if (pack_uudecode_lines_capped(in, n, NULL, cap, &stopped) != r.len || stopped != r.stopped) {
+		fprintf(stderr, "FAIL uudecode_capped length != uudecode_capped, input length %zu, seed %llu\n", n, seed);
+		exit(1);
+	}
+	return r;
+}
+
 static int codecs[PACK_CODECS];
 static int ncodecs;
 
-enum op { ENCODE, ENCODE_URL, DECODE, DECODE_URL, DECODE_LOOSE, DECODE_URL_LOOSE, ENCODE_RFC2045, DECODE_RFC2045, UUENCODE, UUDECODE };
+enum op { ENCODE, ENCODE_URL, DECODE, DECODE_URL, DECODE_LOOSE, DECODE_URL_LOOSE, ENCODE_RFC2045, DECODE_RFC2045, UUENCODE, UUDECODE, UUDECODE_CAPPED };
 
 static const char *op_names[] = {
 	"encode", "encode url", "decode", "decode url", "decode loose", "decode url loose",
-	"encode_rfc2045", "decode_rfc2045", "uuencode", "uudecode"
+	"encode_rfc2045", "decode_rfc2045", "uuencode", "uudecode", "uudecode_capped"
 };
 
 static struct result
@@ -163,6 +182,7 @@ run(enum op op, const char *in, size_t n, int arg, int crlf)
 	case DECODE_RFC2045: return decode_rfc2045(in, n);
 	case UUENCODE: return uuencode(in, n, (size_t)arg);
 	case UUDECODE: return uudecode(in, n);
+	case UUDECODE_CAPPED: return uudecode_capped(in, n, (size_t)arg);
 	}
 	abort();
 }
@@ -235,6 +255,7 @@ encoded(enum op op, char *bin, size_t n, char *out, size_t cap)
 		len = pack_base64_encode_rfc2045(bin, n, out, below(2) ? 45 : 3 * (1 + (int)below(100)), (int)below(2));
 		break;
 	case UUDECODE:
+	case UUDECODE_CAPPED:
 		len = pack_uuencode_lines(bin, n, out, below(2) ? 45 : 3 * (1 + below(21)));
 		break;
 	default:
@@ -244,6 +265,21 @@ encoded(enum op op, char *bin, size_t n, char *out, size_t cap)
 		while (len && out[len - 1] == '=' && below(2)) len--;
 	}
 	return below(2) ? len : mutate(out, len, cap);
+}
+
+/* A cap for uudecode_capped: 0, small, up to the native one, the native one or larger */
+static int
+uu_cap(size_t n)
+{
+	size_t native = pack_uudecode_cap(n);
+
+	switch (below(5)) {
+	case 0: return 0;
+	case 1: return (int)below(100);
+	case 2: return (int)below(native + 1);
+	case 3: return (int)native;
+	default: return (int)(native + 1 + below(300));
+	}
 }
 
 static void
@@ -259,9 +295,10 @@ round_of(size_t n, char *bin, char *enc, size_t cap)
 	compare(ENCODE_RFC2045, bin, n, rfc2045_lines[below(6)], (int)below(2));
 	compare(UUENCODE, bin, n, uu_lines[below(3)], 0);
 
-	for (enum op op = DECODE; op <= UUDECODE; op++) {
+	for (enum op op = DECODE; op <= UUDECODE_CAPPED; op++) {
 		if (op == ENCODE_RFC2045 || op == UUENCODE) continue;
-		compare(op, enc, encoded(op, bin, n, enc, cap), 0, 0);
+		size_t len = encoded(op, bin, n, enc, cap);
+		compare(op, enc, len, op == UUDECODE_CAPPED ? uu_cap(len) : 0, 0);
 	}
 	/* Random bytes */
 	size_t len = below(n + 1);
@@ -269,6 +306,7 @@ round_of(size_t n, char *bin, char *enc, size_t cap)
 	compare(DECODE, enc, len, 0, 0);
 	compare(DECODE_RFC2045, enc, len, 0, 0);
 	compare(UUDECODE, enc, len, 0, 0);
+	compare(UUDECODE_CAPPED, enc, len, uu_cap(len), 0);
 }
 
 static void
