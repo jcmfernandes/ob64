@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.10.0] - 2026-11-26
 
 - Add `Writer.open` and `Reader.open`. With a block, they yield the stream, close it after the block and return the block's value, like `File.open`.
 
