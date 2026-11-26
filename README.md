@@ -128,20 +128,20 @@ Ob64::UU.decode(string)
 Each module has a `Writer` and a `Reader` that wrap an IO, encoding on write and decoding on read. Output is the same as `encode` / `decode` on the whole content.
 
 ```ruby
-File.open("data.b64", "wb") do |file|
-  writer = Ob64::Base64::RFC4648::Writer.new(file)
+Ob64::Base64::RFC4648::Writer.open(File.open("data.b64", "wb")) do |writer|
   writer.write(chunk1)
   writer << chunk2
-  writer.finish   # writes the padding; close also closes the file
-end
+end   # writes the padding and closes the file
 
-reader = Ob64::Base64::RFC4648::Reader.new(File.open("data.b64", "rb"))
-reader.read(1024)   # up to 1024 decoded bytes
-reader.read         # the rest
-reader.close
+Ob64::Base64::RFC4648::Reader.open(File.open("data.b64", "rb")) do |reader|
+  reader.read(1024)   # up to 1024 decoded bytes
+  reader.read         # the rest
+end   # closes the file
 
 IO.copy_stream(Ob64::UU::Reader.new(socket), file)
 ```
+
+Without a block, `open` is `new`: call `finish` (writes the padding, keeps the IO open) or `close` (also closes the IO) yourself.
 
 `Writer.new` and `Reader.new` take the same options as `encode` and `decode`: `urlsafe:`, `padding:` and `loose:` for RFC 4648, `line_length` and `crlf:` for RFC 2045. Readers need an IO with `readpartial`.
 

@@ -14,6 +14,22 @@ module Ob64
   class Writer
     include Ext
 
+    # Like +new+. With a block, yields the writer, closes it after the block,
+    # even if it raises, and returns the block's value, like File.open.
+    #
+    # @yieldparam writer [Writer]
+    # @return [Writer, Object] the writer, or the block's value
+    def self.open(...)
+      writer = new(...)
+      return writer unless block_given?
+
+      begin
+        yield writer
+      ensure
+        writer.close
+      end
+    end
+
     # @param io [IO] - responds to +write+; must not keep the String it is
     #   given, as it is reused
     # @param group [Integer] - bytes that encode on their own

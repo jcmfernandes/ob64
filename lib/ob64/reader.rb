@@ -16,6 +16,22 @@ module Ob64
     CHUNK = 65_536
     private_constant :CHUNK
 
+    # Like +new+. With a block, yields the reader, closes it after the block,
+    # even if it raises, and returns the block's value, like File.open.
+    #
+    # @yieldparam reader [Reader]
+    # @return [Reader, Object] the reader, or the block's value
+    def self.open(...)
+      reader = new(...)
+      return reader unless block_given?
+
+      begin
+        yield reader
+      ensure
+        reader.close
+      end
+    end
+
     # @param io [IO] - responds to +readpartial(maxlen, outbuf)+
     def initialize(io)
       @io = io

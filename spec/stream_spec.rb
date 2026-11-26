@@ -79,6 +79,34 @@ RSpec.describe "Streams" do
         expect(writer.close).to be_nil
       end
 
+      it "yields a new writer to open's block, closes it and returns the block's value" do
+        result = klass.open(io) do |writer|
+          expect(writer).to be_a(klass)
+          writer << bin
+          :done
+        end
+        expect(result).to eq(:done)
+        expect(io).to be_closed
+        expect(io.string).to eq(encode.call(bin))
+      end
+
+      it "closes the writer when open's block raises" do
+        expect {
+          klass.open(io) { |writer|
+            writer << bin
+            raise "boom"
+          }
+        }.to raise_error("boom")
+        expect(io).to be_closed
+        expect(io.string).to eq(encode.call(bin))
+      end
+
+      it "returns a new writer from open without a block" do
+        writer = klass.open(io)
+        expect(writer).to be_a(klass)
+        expect(io).not_to be_closed
+      end
+
       it "raises IOError after finish or close" do
         %i[finish close].each do |method|
           writer = klass.new(StringIO.new)
@@ -131,6 +159,17 @@ RSpec.describe "Streams" do
         end
       end
     end
+  end
+
+  it "passes open's options to new" do
+    io = StringIO.new
+    Ob64::Base64::RFC4648::Writer.open(io, urlsafe: true, padding: false) { |writer| writer << "\xFB\xFF".b }
+    expect(io.string).to eq("-_8")
+    text = StringIO.new("-_8")
+    expect(Ob64::Base64::RFC4648::Reader.open(text, urlsafe: true, &:read)).to eq("\xFB\xFF".b)
+    io = StringIO.new
+    Ob64::Base64::RFC2045::Writer.open(io, 4, crlf: true) { |writer| writer << "abcdef" }
+    expect(io.string).to eq("YWJj\r\nZGVm\r\n")
   end
 
   # Reader => its module's encode
@@ -217,6 +256,22 @@ RSpec.describe "Streams" do
       it "rejects a negative length" do
         expect { reader.read(-1) }.to raise_error(ArgumentError, "negative length -1 given")
         expect { reader.readpartial(-1) }.to raise_error(ArgumentError, "negative length -1 given")
+      end
+
+      it "yields a new reader to open's block, closes it and returns the block's value" do
+        expect(klass.open(io) { |reader| reader.read }).to eq(bin)
+        expect(io).to be_closed
+      end
+
+      it "closes the reader when open's block raises" do
+        expect { klass.open(io) { raise "boom" } }.to raise_error("boom")
+        expect(io).to be_closed
+      end
+
+      it "returns a new reader from open without a block" do
+        reader = klass.open(io)
+        expect(reader).to be_a(klass)
+        expect(io).not_to be_closed
       end
 
       it "closes the io and returns nil from close" do
